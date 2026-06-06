@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Écho</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="main-app">
+
+<!-- ── Sidebar ─────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-brand">
+    <div class="sidebar-logo">Écho</div>
+    <div class="sidebar-doctor" id="doctor-name">Chargement…</div>
+  </div>
+  <ul class="sidebar-nav">
+    <li class="nav-item" data-nav="home">
+      <span class="nav-icon">⊞</span> Accueil
+    </li>
+    <li class="nav-item" data-nav="settings">
+      <span class="nav-icon">⚙</span> Paramètres
+    </li>
+  </ul>
+  <div class="sidebar-footer">Écho v1.0</div>
+</nav>
+
+<!-- ── Zone de contenu ─────────────────────────────── -->
+<main class="content" id="content">
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : ONBOARDING — BIENVENUE
+       ═══════════════════════════════════════════════ -->
+  <div data-view="onboarding-welcome" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="onboarding-wrap">
+      <div class="onboarding-logo">Écho</div>
+      <div class="onboarding-title">Bienvenue dans Écho</div>
+      <div class="onboarding-sub">Votre assistant de transcription médicale — 100&nbsp;% local, 100&nbsp;% confidentiel.</div>
+      <div class="onboarding-form">
+        <div class="field">
+          <label class="field-label" for="ob-name">Quel est votre nom, Docteur ?</label>
+          <input type="text" id="ob-name" placeholder="Dr Dupont" autocomplete="off">
+          <div class="field-err hidden" id="ob-name-err">Ce champ est obligatoire.</div>
+        </div>
+        <div id="ob-banner" class="hidden"></div>
+        <button class="btn btn-primary" id="ob-next" style="width:100%;padding:12px;">
+          Continuer →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : ONBOARDING — CONFIGURATION INITIALE
+       ═══════════════════════════════════════════════ -->
+  <div data-view="onboarding-setup" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header" style="padding-top:28px;">
+      <div class="page-title">Configurons votre espace de travail</div>
+      <div class="page-subtitle">Vous pourrez modifier ces réglages à tout moment dans les paramètres.</div>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="max-width:560px;display:flex;flex-direction:column;gap:22px;">
+        <div>
+          <div class="section-title">Ce que vous entendez — Patient</div>
+          <div class="field">
+            <label class="field-label">Sortie audio (voix du patient)</label>
+            <select id="obs-output"></select>
+          </div>
+        </div>
+        <div>
+          <div class="section-title">Votre micro — Médecin</div>
+          <div class="field">
+            <label class="field-label">Microphone</label>
+            <select id="obs-mic"></select>
+          </div>
+        </div>
+        <div id="obs-banner" class="hidden"></div>
+      </div>
+    </div>
+    <div class="action-bar">
+      <div class="action-bar-right">
+        <button class="btn btn-primary" id="obs-done">
+          Commencer à utiliser Écho →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : ACCUEIL
+       ═══════════════════════════════════════════════ -->
+  <div data-view="home" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header">
+      <div class="page-title" id="home-greeting">Bonjour</div>
+      <div class="page-subtitle" id="home-stats"></div>
+    </div>
+
+    <!-- Bouton nouvelle consultation -->
+    <div class="section" style="padding-bottom:0;">
+      <button class="btn-new-consult" id="btn-new-consult">
+        ＋ Nouvelle consultation
+      </button>
+    </div>
+
+    <!-- Sélecteur de périphériques (affiché inline avant de lancer) -->
+    <div id="device-picker" class="hidden" style="
+      margin:0 32px;padding:20px;
+      background:#fff;border:1px solid var(--border);
+      border-radius:var(--r-md);box-shadow:var(--shadow-card);">
+      <div class="section-title" style="margin-bottom:16px;">Périphériques audio</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div class="field">
+          <label class="field-label">Ce que vous entendez (patient)</label>
+          <select id="dp-output"></select>
+        </div>
+        <div class="field">
+          <label class="field-label">Votre micro (médecin)</label>
+          <select id="dp-mic"></select>
+        </div>
+      </div>
+      <div id="dp-banner" class="hidden" style="margin-bottom:12px;"></div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" id="dp-start">Démarrer la consultation</button>
+        <button class="btn btn-secondary" id="dp-cancel">Annuler</button>
+      </div>
+    </div>
+
+    <!-- Consultations récentes -->
+    <div class="section flex-1">
+      <div class="section-title">Consultations récentes</div>
+      <div id="consult-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : PARAMÈTRES
+       ═══════════════════════════════════════════════ -->
+  <div data-view="settings" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header">
+      <div class="page-title">Paramètres</div>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="max-width:580px;display:flex;flex-direction:column;gap:28px;">
+
+        <div>
+          <div class="section-title">Médecin</div>
+          <div class="field">
+            <label class="field-label">Nom affiché</label>
+            <input type="text" id="set-doctor" placeholder="Dr Dupont">
+          </div>
+        </div>
+
+        <div class="section-divider" style="margin:0;"></div>
+
+        <div>
+          <div class="section-title">Audio — Patient (loopback)</div>
+          <div class="field" style="margin-bottom:14px;">
+            <label class="field-label">Sortie audio</label>
+            <select id="set-output"></select>
+          </div>
+          <div class="field">
+            <label class="field-label">Volume patient</label>
+            <div class="slider-row">
+              <input type="range" id="set-gain-patient" min="0" max="150" value="100" step="5">
+              <span class="slider-val" id="lbl-gain-patient">100%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider" style="margin:0;"></div>
+
+        <div>
+          <div class="section-title">Audio — Médecin (micro)</div>
+          <div class="field" style="margin-bottom:14px;">
+            <label class="field-label">Microphone</label>
+            <select id="set-mic"></select>
+          </div>
+          <div class="field">
+            <label class="field-label">Volume micro</label>
+            <div class="slider-row">
+              <input type="range" id="set-gain-mic" min="0" max="150" value="100" step="5">
+              <span class="slider-val" id="lbl-gain-mic">100%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider" style="margin:0;"></div>
+
+        <div>
+          <div class="section-title">Dossier de sauvegarde</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="text" id="set-folder" placeholder="Non défini — les fichiers sont sauvegardés à l'endroit choisi" readonly
+                   style="flex:1;background:#FAFBFC;color:var(--txt-secondary);">
+            <button class="btn btn-secondary" id="set-folder-btn">Modifier…</button>
+          </div>
+        </div>
+
+        <div id="set-banner" class="hidden"></div>
+      </div>
+    </div>
+    <div class="action-bar">
+      <div class="action-bar-right">
+        <button class="btn btn-primary" id="btn-save-settings">Enregistrer les paramètres</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : DÉTAIL D'UNE CONSULTATION
+       ═══════════════════════════════════════════════ -->
+  <div data-view="detail" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header" style="display:flex;align-items:center;gap:14px;">
+      <button class="btn btn-secondary btn-sm" id="detail-back" style="flex-shrink:0;">← Retour</button>
+      <div>
+        <div class="page-title" id="detail-title">Consultation</div>
+        <div class="page-subtitle" id="detail-date"></div>
+      </div>
+    </div>
+
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="max-width:640px;display:flex;flex-direction:column;gap:24px;">
+
+        <!-- Infos patient -->
+        <div>
+          <div class="section-title">Patient</div>
+          <div class="card">
+            <table class="info-table" id="detail-patient-table"></table>
+          </div>
+        </div>
+
+        <!-- Résumé -->
+        <div id="detail-summary-wrap">
+          <div class="section-title">Résumé de la consultation</div>
+          <div class="card" style="padding:18px;font-size:14px;line-height:1.7;
+               color:var(--txt-primary);white-space:pre-wrap;" id="detail-summary"></div>
+        </div>
+
+        <!-- Fichier -->
+        <div>
+          <div class="section-title">Compte-rendu</div>
+          <div class="card" style="padding:16px 20px;">
+            <div id="detail-file-path"
+                 style="font-size:13px;color:var(--txt-secondary);
+                        word-break:break-all;margin-bottom:12px;"></div>
+            <div id="detail-file-warn" class="hidden banner banner-warn"
+                 style="margin-bottom:12px;">
+              Ce fichier n'est plus disponible à cet emplacement.
+            </div>
+            <div style="display:flex;gap:8px;" id="detail-file-btns">
+              <button class="btn btn-primary" id="detail-open-file">Ouvrir dans Word</button>
+              <button class="btn btn-secondary" id="detail-open-folder">Ouvrir le dossier</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</main><!-- /content -->
+
+<script src="app.js"></script>
+<script>
+'use strict';
+
+/* ------------------------------------------------------------------ */
+/*  État global                                                        */
+/* ------------------------------------------------------------------ */
+
+let currentView    = null;
+let allConsultations = [];
+let currentConsult   = null;
+
+/* ------------------------------------------------------------------ */
+/*  Navigation SPA                                                     */
+/* ------------------------------------------------------------------ */
+
+function navigate(viewName) {
+  document.querySelectorAll('[data-view]').forEach(el => {
+    el.classList.toggle('hidden', el.dataset.view !== viewName);
+  });
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.nav === viewName);
+  });
+  currentView = viewName;
+
+  // Démarrer les téléchargements si on arrive sur la vue download.
+  if (viewName === 'download') {
+    initDownloads();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Initialisation                                                     */
+/* ------------------------------------------------------------------ */
+
+onReady(async () => {
+  const state = await api('get_app_state');
+  if (!state) return;
+
+  // Vérifier d'abord les modèles.
+  const models = await api('check_models');
+  if (models && (!models.whisper_ok || !models.qwen_ok)) {
+    // Injecter la vue de téléchargement dynamiquement.
+    const resp = await fetch('download.html');
+    const html = await resp.text();
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const dlView = tmp.querySelector('[data-view="download"]');
+    if (dlView) {
+      document.getElementById('content').appendChild(dlView);
+    }
+    navigate('download');
+    return;
+  }
+
+  if (!state.onboarding_done) {
+    navigate('onboarding-welcome');
+    return;
+  }
+
+  $('doctor-name').textContent = state.doctor_name || '';
+  await loadHome();
+  navigate('home');
+});
+
+/* ================================================================== */
+/*  Téléchargement des modèles (vue download.html)                     */
+/* ================================================================== */
+
+const _MB = 1024 * 1024;
+
+function fmtBytes(b) {
+  const m = b / _MB;
+  if (m < 10) return m.toFixed(1) + ' Mo';
+  return Math.round(m) + ' Mo';
+}
+
+function fmtSpeed(speed) {
+  if (speed <= 0) return '—';
+  const ms = speed / _MB;
+  if (ms < 0.1) return (speed / 1024).toFixed(0) + ' Ko/s';
+  return ms.toFixed(1) + ' Mo/s';
+}
+
+function fmtETA(eta) {
+  if (!eta || eta <= 0) return '—';
+  if (eta < 60) return '~' + Math.round(eta) + ' s';
+  return '~' + Math.round(eta / 60) + ' min';
+}
+
+function setStatus(id, text, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = type === 'ok' ? 'var(--accent)' :
+                   type === 'err' ? 'var(--danger)' :
+                   type === 'run' ? 'var(--txt-primary)' :
+                   'var(--txt-secondary)';
+}
+
+function setBar(id, pct) {
+  const bar = document.getElementById(id);
+  if (bar) bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+}
+
+function updateModel(isQwen, state) {
+  const prefix = isQwen ? 'dl-q' : 'dl-w';
+  const total  = isQwen ? 2_050_000_000 : 1_700_000_000;
+
+  setStatus(prefix + '-status', state.done ? '✓ Terminé' :
+            state.error ? 'Échec' : 'Téléchargement…',
+            state.done ? 'ok' : (state.error ? 'err' : 'run'));
+  setBar(prefix + '-bar', (state.downloaded / total) * 100);
+
+  const bytesEl = document.getElementById(prefix + '-bytes');
+  if (bytesEl) bytesEl.textContent = fmtBytes(state.downloaded) + ' / ' + fmtBytes(total);
+
+  const speedEl = document.getElementById(prefix + '-speed');
+  const etaEl   = document.getElementById(prefix + '-eta');
+  if (speedEl && etaEl) {
+    speedEl.textContent = state.done ? '✓' : fmtSpeed(state.speed);
+    etaEl.textContent   = state.done ? '—' : fmtETA(state.eta);
+  }
+
+  // Erreur
+  const errDiv = document.getElementById(prefix + '-error');
+  const retryBtn = document.getElementById(prefix + '-retry');
+  if (errDiv && retryBtn) {
+    if (state.error) {
+      const errMsg = document.getElementById(prefix + '-errmsg');
+      if (errMsg) errMsg.textContent = state.error;
+      errDiv.classList.remove('hidden');
+      retryBtn.style.display = 'inline-flex';
+    } else {
+      errDiv.classList.add('hidden');
+      retryBtn.style.display = 'none';
+    }
+  }
+}
+
+let _dlPollId = null;
+
+async function pollProgress() {
+  const prog = await api('get_download_progress');
+  if (!prog) { _dlPollId = setTimeout(pollProgress, 600); return; }
+
+  updateModel(false, prog.whisper);
+  updateModel(true,  prog.qwen);
+
+  if (prog.whisper.done && prog.qwen.done && !prog.whisper.error && !prog.qwen.error) {
+    // Terminé — continuer après 1,5s.
+    setTimeout(() => {
+      document.dispatchEvent(new CustomEvent('downloads-complete'));
+    }, 1500);
+    return;
+  }
+
+  _dlPollId = setTimeout(pollProgress, 600);
+}
+
+function setupDownloadRetries() {
+  ['dl-w', 'dl-q'].forEach(prefix => {
+    const btn = document.getElementById(prefix + '-retry');
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        const model = prefix === 'dl-w' ? 'whisper' : 'qwen';
+        const res = await api('retry_download', model);
+        if (res && res.ok) _dlPollId = setTimeout(pollProgress, 600);
+      });
+    }
+  });
+}
+
+let _dlStarted = false;
+
+async function initDownloads() {
+  if (_dlStarted) return;
+  _dlStarted = true;
+  setupDownloadRetries();
+  await api('start_downloads');
+  _dlPollId = setTimeout(pollProgress, 600);
+}
+
+/* Quand les téléchargements sont finis, rafraîchir. */
+document.addEventListener('downloads-complete', async () => {
+  const state = await api('get_app_state');
+  if (!state) return;
+  if (!state.onboarding_done) {
+    navigate('onboarding-welcome');
+  } else {
+    $('doctor-name').textContent = state.doctor_name || '';
+    await loadHome();
+    navigate('home');
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Onboarding                                                         */
+/* ------------------------------------------------------------------ */
+
+$('ob-next').addEventListener('click', () => {
+  const name = $('ob-name').value.trim();
+  if (!name) { show($('ob-name-err')); $('ob-name').focus(); return; }
+  hide($('ob-name-err'));
+  // Pré-remplir la page de config avec les périphériques.
+  populateDeviceSetupPage();
+  navigate('onboarding-setup');
+});
+$('ob-name').addEventListener('keydown', e => { if (e.key==='Enter') $('ob-next').click(); });
+
+async function populateDeviceSetupPage() {
+  const devs = await api('get_devices');
+  if (!devs) return;
+  populateSelect($('obs-output'), devs.outputs, devs.selected_output);
+  populateSelect($('obs-mic'),    devs.mics,    devs.selected_mic);
+}
+
+$('obs-done').addEventListener('click', async () => {
+  const name = $('ob-name').value.trim();
+  const res  = await api('complete_onboarding', name, $('obs-mic').value, $('obs-output').value);
+  if (res && res.ok) {
+    $('doctor-name').textContent = name;
+    await loadHome();
+    navigate('home');
+  } else {
+    const banner = $('obs-banner');
+    banner.className = 'banner banner-err';
+    banner.textContent = (res && res.error) || 'Erreur.';
+    show(banner);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Sidebar                                                            */
+/* ------------------------------------------------------------------ */
+
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', async () => {
+    const nav = el.dataset.nav;
+    if (nav === 'home') {
+      await loadHome();
+      navigate('home');
+    } else if (nav === 'settings') {
+      await loadSettings();
+      navigate('settings');
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Accueil                                                            */
+/* ------------------------------------------------------------------ */
+
+async function loadHome() {
+  const state = await api('get_app_state');
+  if (state) {
+    const d = new Date();
+    const days  = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+    const month = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+    $('home-greeting').textContent = 'Bonjour, ' + (state.doctor_name || 'Docteur');
+    $('home-stats').textContent =
+      days[d.getDay()] + ' ' + d.getDate() + ' ' + month[d.getMonth()] + ' ' + d.getFullYear();
+  }
+  await loadConsultations();
+}
+
+async function loadConsultations() {
+  allConsultations = (await api('get_consultations')) || [];
+  renderConsultationList();
+}
+
+function renderConsultationList() {
+  const list = $('consult-list');
+  list.innerHTML = '';
+  if (allConsultations.length === 0) {
+    list.innerHTML = '<div class="empty-state">' +
+      '<div class="empty-state-icon">∅</div>' +
+      '<div>Aucune consultation enregistrée pour le moment.</div></div>';
+    return;
+  }
+  allConsultations.slice(0, 20).forEach(c => {
+    const p     = c.patient || {};
+    const nom   = ((p.nom || '') + ' ' + (p.prenom || '')).trim() || '—';
+    const motif = p.motif || '—';
+    const ddn   = p.naissance ? 'Né(e) le ' + p.naissance : '';
+    const dur   = c.duration_min ? ' · ' + c.duration_min + ' min' : '';
+    const card  = document.createElement('div');
+    card.className = 'card consultation-card';
+    card.dataset.id = c.id;
+    card.innerHTML =
+      '<div class="card-row1">' +
+        '<span class="card-patient">' + esc(nom) + '</span>' +
+        '<span class="card-date">' + esc(formatDate(c.date)) + esc(dur) + '</span>' +
+      '</div>' +
+      '<div class="card-detail">' + esc(ddn) + (ddn ? ' · ' : '') + 'Motif : ' + esc(motif) + '</div>' +
+      '<a class="card-link" href="#">Voir le détail →</a>';
+    card.querySelector('.card-link').addEventListener('click', e => {
+      e.preventDefault();
+      showDetail(c);
+    });
+    list.appendChild(card);
+  });
+}
+
+/* ---- Démarrage consultation ---- */
+
+$('btn-new-consult').addEventListener('click', async () => {
+  show($('device-picker'));
+  $('btn-new-consult').disabled = true;
+  const devs = await api('get_devices');
+  if (devs) {
+    populateSelect($('dp-output'), devs.outputs, devs.selected_output);
+    populateSelect($('dp-mic'),    devs.mics,    devs.selected_mic);
+  }
+});
+
+$('dp-cancel').addEventListener('click', () => {
+  hide($('device-picker'));
+  $('btn-new-consult').disabled = false;
+});
+
+$('dp-start').addEventListener('click', async () => {
+  $('dp-start').disabled = true;
+  clearBanner($('dp-banner'));
+  const res = await api('begin_consultation', $('dp-mic').value, $('dp-output').value);
+  if (res && res.ok) {
+    hide($('device-picker'));
+    $('btn-new-consult').disabled = false;
+  } else {
+    const b = $('dp-banner');
+    b.className = 'banner banner-err';
+    b.textContent = (res && res.error) || 'Impossible de démarrer la consultation.';
+    show(b);
+    $('dp-start').disabled = false;
+  }
+});
+
+/* Appelé par Python (api._main_win.evaluate_js) après fin de consultation */
+function onConsultationEnded() {
+  loadHome();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Paramètres                                                         */
+/* ------------------------------------------------------------------ */
+
+async function loadSettings() {
+  const s = await api('get_settings');
+  if (!s) return;
+  $('set-doctor').value = s.doctor_name  || '';
+  $('set-folder').value = s.save_folder  || '';
+  populateSelect($('set-output'), s.outputs, s.selected_output);
+  populateSelect($('set-mic'),    s.mics,    s.selected_mic);
+  const gp = Math.round((s.gain_patient || 1.0) * 100);
+  const gm = Math.round((s.gain_mic     || 1.0) * 100);
+  $('set-gain-patient').value = gp; $('lbl-gain-patient').textContent = gp + '%';
+  $('set-gain-mic').value     = gm; $('lbl-gain-mic').textContent     = gm + '%';
+  hide($('set-banner'));
+}
+
+$('set-gain-patient').addEventListener('input', function() {
+  $('lbl-gain-patient').textContent = this.value + '%';
+  api('set_volume_patient', parseInt(this.value) / 100);
+});
+$('set-gain-mic').addEventListener('input', function() {
+  $('lbl-gain-mic').textContent = this.value + '%';
+  api('set_volume_mic', parseInt(this.value) / 100);
+});
+
+$('set-folder-btn').addEventListener('click', async () => {
+  const res = await api('pick_folder');
+  if (res && res.path) $('set-folder').value = res.path;
+});
+
+$('btn-save-settings').addEventListener('click', async () => {
+  $('btn-save-settings').disabled = true;
+  const data = {
+    doctor_name:  $('set-doctor').value.trim(),
+    save_folder:  $('set-folder').value.trim(),
+    gain_patient: parseInt($('set-gain-patient').value) / 100,
+    gain_mic:     parseInt($('set-gain-mic').value)     / 100,
+    sortie:       $('set-output').value,
+    micro:        $('set-mic').value,
+  };
+  const res = await api('save_settings', data);
+  const b = $('set-banner');
+  if (res && res.ok) {
+    b.className = 'banner banner-ok';
+    b.textContent = 'Paramètres enregistrés.';
+    $('doctor-name').textContent = data.doctor_name;
+  } else {
+    b.className = 'banner banner-err';
+    b.textContent = 'Erreur lors de l\'enregistrement.';
+  }
+  show(b);
+  $('btn-save-settings').disabled = false;
+});
+
+/* ------------------------------------------------------------------ */
+/*  Détail consultation                                                */
+/* ------------------------------------------------------------------ */
+
+async function showDetail(c) {
+  currentConsult = c;
+  const p = c.patient || {};
+  $('detail-title').textContent = ((p.nom||'') + ' ' + (p.prenom||'')).trim() || 'Consultation';
+  $('detail-date').textContent  = formatDate(c.date) + (c.duration_min ? ' · ' + c.duration_min + ' min' : '');
+
+  // Tableau patient
+  const rows = [
+    ['Nom',          p.nom || '—'],
+    ['Prénom',       p.prenom || '—'],
+    ['Né(e) le',     p.naissance || '—'],
+    ['Motif',        p.motif || '—'],
+    ['Date',         formatDate(c.date)],
+    ['Durée',        c.duration_min ? c.duration_min + ' min' : '—'],
+  ];
+  $('detail-patient-table').innerHTML = rows.map(([l,v]) =>
+    '<tr><td>' + esc(l) + '</td><td>' + esc(v) + '</td></tr>').join('');
+
+  // Résumé
+  if (c.summary) {
+    $('detail-summary').textContent = c.summary;
+    show($('detail-summary-wrap'));
+  } else {
+    hide($('detail-summary-wrap'));
+  }
+
+  // Fichier
+  $('detail-file-path').textContent = c.file_path || '(chemin non disponible)';
+  const fres = c.file_path ? await api('file_exists', c.file_path) : {exists:false};
+  if (fres && fres.exists) {
+    hide($('detail-file-warn'));
+    show($('detail-file-btns'));
+  } else {
+    show($('detail-file-warn'));
+    hide($('detail-file-btns'));
+  }
+
+  navigate('detail');
+}
+
+$('detail-back').addEventListener('click', () => navigate('home'));
+
+$('detail-open-file').addEventListener('click', async () => {
+  if (currentConsult && currentConsult.file_path)
+    await api('open_file_os', currentConsult.file_path);
+});
+$('detail-open-folder').addEventListener('click', async () => {
+  if (currentConsult && currentConsult.file_path)
+    await api('open_folder_os', currentConsult.file_path);
+});
+</script>
+</body>
+</html>

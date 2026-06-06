@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Écho — Résumé</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="bar">
+    <span class="app-title">Résumé</span>
+    <span class="flex-1"></span>
+    <span class="status-text" id="resume-status">À relire</span>
+  </div>
+
+  <div class="resume-warn">
+    ⚠&nbsp; Résumé généré automatiquement — relisez et corrigez avant d'enregistrer.
+    La transcription mot à mot est toujours conservée dans le fichier.
+  </div>
+
+  <textarea id="resume-text" class="flex-1" spellcheck="true"
+            placeholder="Génération en cours…"></textarea>
+
+  <div class="bar bar-bottom">
+    <button id="btn-cancel" class="btn">Annuler</button>
+    <button id="btn-validate" class="btn btn-primary">Valider et enregistrer</button>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+'use strict';
+onReady(async () => {
+  /* Demande le résumé généré (ou attend via polling) */
+  const res = await api('get_resume');
+  if (res && res.texte) {
+    $('resume-text').value = res.texte;
+    $('resume-status').textContent = 'Prêt';
+  }
+});
+$('btn-validate').addEventListener('click', async () => {
+  const texte = $('resume-text').value.trim();
+  await api('validate_resume', texte);
+});
+$('btn-cancel').addEventListener('click', () => api('cancel_save'));
+</script>
+</body>
+</html>

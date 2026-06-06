@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Écho — Documents annexes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="bar">
+    <span class="app-title">Documents créés lors de cette consultation</span>
+  </div>
+
+  <div class="form-wrap" style="gap:0">
+    <p style="font-size:12px;color:var(--txt-dim);margin-bottom:16px;">
+      Sélectionnez les documents à inclure. Vous pouvez joindre une photo ou un scan pour chacun.
+    </p>
+
+    <!-- Ordonnance -->
+    <div class="check-item">
+      <label class="check-row">
+        <input type="checkbox" id="chk-ordo">
+        <span class="check-lbl">Ordonnance</span>
+      </label>
+      <div class="check-body" id="body-ordo">
+        <div class="file-row">
+          <button class="btn btn-sm" onclick="joindreFichier('ordo')">📎 Joindre (image ou PDF)</button>
+          <span class="file-name empty" id="file-ordo">Aucun fichier</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrêt de travail -->
+    <div class="check-item">
+      <label class="check-row">
+        <input type="checkbox" id="chk-arret">
+        <span class="check-lbl">Arrêt de travail</span>
+      </label>
+      <div class="check-body" id="body-arret">
+        <div class="file-row">
+          <button class="btn btn-sm" onclick="joindreFichier('arret')">📎 Joindre (image ou PDF)</button>
+          <span class="file-name empty" id="file-arret">Aucun fichier</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Autre -->
+    <div class="check-item">
+      <label class="check-row">
+        <input type="checkbox" id="chk-autre">
+        <span class="check-lbl">Autre document</span>
+      </label>
+      <div class="check-body" id="body-autre">
+        <input type="text" id="autre-type" placeholder="Précisez le type (ex. Certificat médical)">
+        <div class="file-row">
+          <button class="btn btn-sm" onclick="joindreFichier('autre')">📎 Joindre (image ou PDF)</button>
+          <span class="file-name empty" id="file-autre">Aucun fichier</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bar bar-bottom">
+    <button id="btn-skip" class="btn">Passer — aucun document</button>
+    <button id="btn-continue" class="btn btn-primary">Continuer</button>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+'use strict';
+const DOCS = ['ordo', 'arret', 'autre'];
+const fichiers = { ordo: null, arret: null, autre: null };
+
+/* Afficher/cacher le corps de chaque case */
+DOCS.forEach(k => {
+  $('chk-' + k).addEventListener('change', function() {
+    const body = $('body-' + k);
+    this.checked ? body.classList.add('open') : body.classList.remove('open');
+  });
+});
+
+async function joindreFichier(k) {
+  const res = await api('pick_file');
+  if (res && res.path) {
+    fichiers[k] = res.path;
+    const span = $('file-' + k);
+    const name = res.path.split(/[\\/]/).pop();
+    span.textContent = name.length > 35 ? name.slice(0,32) + '…' : name;
+    span.classList.remove('empty');
+  }
+}
+
+async function collecterEtContinuer() {
+  const annexes = [];
+  if ($('chk-ordo').checked)
+    annexes.push({ label: 'Ordonnance', fichier: fichiers.ordo });
+  if ($('chk-arret').checked)
+    annexes.push({ label: 'Arrêt de travail', fichier: fichiers.arret });
+  if ($('chk-autre').checked)
+    annexes.push({ label: $('autre-type').value.trim() || 'Autre document', fichier: fichiers.autre });
+  await api('set_annexes', annexes);
+  await api('navigate', 'save');
+}
+
+$('btn-continue').addEventListener('click', collecterEtContinuer);
+$('btn-skip').addEventListener('click', async () => {
+  await api('set_annexes', []);
+  await api('navigate', 'save');
+});
+</script>
+</body>
+</html>

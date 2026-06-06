@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Écho</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="overlay-app">
+
+<!-- ════════════════════════════════════════════════════════════
+     VUE SÉLECTEUR — affiché quand l'overlay s'ouvre depuis l'accueil
+     ════════════════════════════════════════════════════════════ -->
+<div id="view-selector" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+  <div class="o-bar">
+    <span class="o-app-title">Écho</span>
+  </div>
+  <div class="sel-wrap">
+    <div class="sel-title">Réglages audio</div>
+    <div class="sel-sub">Vérifiez vos périphériques pour cette consultation.</div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="display:flex;flex-direction:column;gap:5px;">
+        <span class="o-field-label">Ce que vous entendez
+          <span class="o-field-sublabel">Voix du patient — sortie audio</span>
+        </span>
+        <select id="sel-output" class="o-select"></select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:5px;">
+        <span class="o-field-label">Votre micro
+          <span class="o-field-sublabel">Voix du médecin — entrée audio</span>
+        </span>
+        <select id="sel-mic" class="o-select"></select>
+      </div>
+      <div id="sel-banner" class="hidden"></div>
+    </div>
+  </div>
+  <div class="o-bar o-bar-bottom" style="padding:0 14px;">
+    <button id="btn-start" class="o-btn o-btn-primary" disabled style="flex:1;max-width:none;">
+      Démarrer
+    </button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     VUE PRINCIPALE — Overlay de transcription
+     ════════════════════════════════════════════════════════════ -->
+<div id="view-main" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+
+  <!-- En-tête -->
+  <div class="o-bar" id="main-bar">
+    <div class="rec-dot" id="rec-dot"></div>
+    <span class="o-app-title">Écho</span>
+    <span class="flex-1"></span>
+    <span class="o-status-text" id="status-text"></span>
+    <button class="o-btn o-btn-icon" id="btn-settings" title="Réglages en cours" style="padding:6px 8px;">⚙</button>
+  </div>
+
+  <!-- Bannière aucun micro -->
+  <div id="no-mic-banner" class="hidden o-banner o-banner-warn"
+       style="border-radius:0;border-left:none;border-right:none;border-top:none;"></div>
+
+  <!-- Transcript -->
+  <div id="transcript"></div>
+
+  <!-- Barre basse -->
+  <div class="o-bar o-bar-bottom" style="justify-content:flex-end;gap:8px;">
+    <button id="btn-quit" class="o-btn o-btn-danger">Quitter</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     PANNEAU LATÉRAL — Réglages pendant la consultation
+     ════════════════════════════════════════════════════════════ -->
+<div class="settings-panel" id="settings-panel">
+  <div class="sp-header">
+    <span>Réglages audio</span>
+    <button class="o-btn o-btn-icon" id="sp-close" style="padding:4px 7px;">✕</button>
+  </div>
+  <div class="sp-body">
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <span class="o-field-label">Ce que vous entendez (patient)</span>
+      <select id="sp-output" class="o-select"></select>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <input type="range" id="sp-gain-patient" min="0" max="150" value="100" step="5"
+               style="flex:1;accent-color:var(--chip-m-fg);">
+        <span style="font-size:12px;color:var(--txt-dim);min-width:35px;" id="sp-lbl-p">100%</span>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <span class="o-field-label">Votre micro (médecin)</span>
+      <select id="sp-mic" class="o-select"></select>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <input type="range" id="sp-gain-mic" min="0" max="150" value="100" step="5"
+               style="flex:1;accent-color:var(--chip-m-fg);">
+        <span style="font-size:12px;color:var(--txt-dim);min-width:35px;" id="sp-lbl-m">100%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     MODALES DU FLUX DE SAUVEGARDE
+     ════════════════════════════════════════════════════════════ -->
+
+<!-- ── Modal : confirmation fermeture sans sauvegarde ── -->
+<div class="modal-overlay hidden" id="modal-confirm">
+  <div class="modal-header">Quitter sans enregistrer ?</div>
+  <div class="modal-body">
+    <p style="font-size:14px;line-height:1.6;color:var(--txt-main);">
+      La consultation en cours n'a pas été enregistrée.<br>
+      Souhaitez-vous l'enregistrer avant de quitter ?
+    </p>
+  </div>
+  <div class="modal-footer">
+    <button class="o-btn" id="conf-save">Enregistrer</button>
+    <button class="o-btn o-btn-danger" id="conf-discard">Quitter sans enregistrer</button>
+  </div>
+</div>
+
+<!-- ── Modal : formulaire patient ── -->
+<div class="modal-overlay hidden" id="modal-patient">
+  <div class="modal-header">Informations patient</div>
+  <div class="modal-body">
+    <div class="m-field">
+      <label class="m-label">Nom <span style="color:var(--color-err)">*</span></label>
+      <input type="text" class="m-input" id="p-nom" placeholder="DUPONT" autocomplete="off">
+      <div class="m-err hidden" id="p-nom-err">Ce champ est obligatoire.</div>
+    </div>
+    <div class="m-field">
+      <label class="m-label">Prénom <span style="color:var(--color-err)">*</span></label>
+      <input type="text" class="m-input" id="p-prenom" placeholder="Marie" autocomplete="off">
+      <div class="m-err hidden" id="p-prenom-err">Ce champ est obligatoire.</div>
+    </div>
+    <div class="m-field">
+      <label class="m-label">Date de naissance (JJ/MM/AAAA) <span style="color:var(--color-err)">*</span></label>
+      <input type="text" class="m-input" id="p-ddn" placeholder="15/03/1985" autocomplete="off">
+      <div class="m-err hidden" id="p-ddn-err">Ce champ est obligatoire.</div>
+    </div>
+    <div class="m-field">
+      <label class="m-label">Motif de consultation <span style="color:var(--txt-sys)">(facultatif)</span></label>
+      <input type="text" class="m-input" id="p-motif" placeholder="ex. Renouvellement d'ordonnance" autocomplete="off">
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="o-btn" id="p-cancel">Annuler</button>
+    <button class="o-btn o-btn-primary" id="p-submit">Continuer →</button>
+  </div>
+</div>
+
+<!-- ── Modal : progression résumé ── -->
+<div class="modal-overlay hidden" id="modal-progress">
+  <div class="prog-wrap">
+    <div class="spinner"></div>
+    <div class="prog-title" id="prog-title">Chargement du modèle de résumé…</div>
+    <div class="prog-sub">Cela peut prendre une à deux minutes selon l'ordinateur.</div>
+  </div>
+</div>
+
+<!-- ── Modal : relecture résumé ── -->
+<div class="modal-overlay hidden" id="modal-resume"
+     style="flex-direction:column;">
+  <div class="modal-header">Résumé — à relire et corriger</div>
+  <div style="padding:10px 16px;background:rgba(210,153,34,.08);
+       border-bottom:1px solid rgba(210,153,34,.18);
+       font-size:12px;color:var(--color-warn);flex-shrink:0;">
+    ⚠&nbsp; Résumé généré automatiquement. Relisez, corrigez si nécessaire, puis validez.
+    La transcription mot à mot est toujours conservée dans le fichier.
+  </div>
+  <textarea id="resume-text" style="flex:1;"></textarea>
+  <div class="modal-footer">
+    <button class="o-btn" id="res-cancel">Annuler</button>
+    <button class="o-btn o-btn-primary" id="res-validate">Valider →</button>
+  </div>
+</div>
+
+<!-- ── Modal : documents annexes ── -->
+<div class="modal-overlay hidden" id="modal-annexes">
+  <div class="modal-header">Documents créés lors de cette consultation</div>
+  <div class="modal-body">
+    <p style="font-size:12.5px;color:var(--txt-dim);margin-bottom:4px;">
+      Cochez les documents à inclure dans le compte-rendu. Joindre un fichier est facultatif.
+    </p>
+    <div class="check-item">
+      <label class="check-row">
+        <input type="checkbox" id="ann-ordo">
+        <span class="check-lbl">Ordonnance</span>
+      </label>
+      <div class="check-body" id="ann-ordo-body">
+        <div class="file-row">
+          <button class="o-btn o-btn-primary" style="font-size:12px;padding:6px 12px;" onclick="pickFile('ordo')">
+            📎 Joindre un fichier
+          </button>
+          <span class="file-name empty" id="fn-ordo">Aucun fichier</span>
+        </div>
+      </div>
+    </div>
+    <div class="check-item">
+      <label class="check-row">
+        <input type="checkbox" id="ann-arret">
+        <span class="check-lbl">Arrêt de travail</span>
+      </label>
+      <div class="check-body" id="ann-arret-body">
+        <div class="file-row">
+          <button class="o-btn o-btn-primary" style="font-size:12px;padding:6px 12px;" onclick="pickFile('arret')">
+            📎 Joindre un fichier
+          </button>
+          <span class="file-name empty" id="fn-arret">Aucun fichier</span>
+        </div>
+      </div>
+    </div>
+    <div class="check-item">
+      <label class="check-row">
+        <input type="checkbox" id="ann-autre">
+        <span class="check-lbl">Autre document</span>
+      </label>
+      <div class="check-body" id="ann-autre-body">
+        <input type="text" class="m-input" id="ann-autre-type" placeholder="Précisez le type (ex. Certificat médical)">
+        <div class="file-row">
+          <button class="o-btn o-btn-primary" style="font-size:12px;padding:6px 12px;" onclick="pickFile('autre')">
+            📎 Joindre un fichier
+          </button>
+          <span class="file-name empty" id="fn-autre">Aucun fichier</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="o-btn" id="ann-skip">Passer</button>
+    <button class="o-btn o-btn-primary" id="ann-continue">Continuer →</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     Scripts
+     ════════════════════════════════════════════════════════════ -->
+<script src="app.js"></script>
+<script>
+'use strict';
+
+/* ------------------------------------------------------------------ */
+/*  État local                                                         */
+/* ------------------------------------------------------------------ */
+
+const fichiers = { ordo: null, arret: null, autre: null };
+let resumeValidated = '';
+let isActive = false;  // vrai dès que start() a réussi
+
+/* ------------------------------------------------------------------ */
+/*  Helpers transcript                                                 */
+/* ------------------------------------------------------------------ */
+
+function appendEntry(item) {
+  const type = item.type || 'INFO';
+  const div  = document.createElement('div');
+  if (type === 'Medecin' || type === 'Patient') {
+    div.className = 'entry';
+    div.innerHTML =
+      '<span class="chip ' + (type==='Medecin'?'chip-m':'chip-p') + '">' +
+        (type==='Medecin'?'Médecin':'Patient') +
+      '</span><div class="entry-body">' +
+        '<span class="txt">' + esc(item.texte) + '</span>' +
+        '<time>' + esc(item.timestamp) + '</time>' +
+      '</div>';
+  } else {
+    const cls = type==='AVIS' ? 'entry-avis' : type==='ERREUR' ? 'entry-err' : 'entry-sys';
+    div.className = 'entry ' + cls;
+    div.innerHTML = '<div class="entry-body"><span class="txt">' + esc(item.texte) + '</span></div>';
+  }
+  const t = $('transcript');
+  t.appendChild(div);
+  t.scrollTop = t.scrollHeight;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Initialisation                                                     */
+/* ------------------------------------------------------------------ */
+
+onReady(async () => {
+  // Si l'overlay s'est ouvert via begin_consultation(), il n'a pas de sélecteur
+  // affiché — on passe directement à la vue main. Sinon on montre le sélecteur.
+  const state = await api('get_app_state');
+  // L'overlay est lancé APRÈS begin_consultation(), donc on passe direct.
+  show($('view-main'));
+  // Démarrer le polling dès l'ouverture.
+  isActive = true;
+  startPolling(items => items.forEach(appendEntry), 200);
+  // Charger les péri pour le panneau settings.
+  loadSettingsPanel();
+});
+
+async function loadSettingsPanel() {
+  const devs = await api('get_devices');
+  if (!devs) return;
+  populateSelect($('sp-output'), devs.outputs, devs.selected_output);
+  populateSelect($('sp-mic'),    devs.mics,    devs.selected_mic);
+  const gp = await api('get_app_state');
+  if (gp) {
+    const vp = Math.round((gp.gain_patient||1)*100);
+    const vm = Math.round((gp.gain_mic    ||1)*100);
+    $('sp-gain-patient').value = vp; $('sp-lbl-p').textContent = vp + '%';
+    $('sp-gain-mic').value     = vm; $('sp-lbl-m').textContent = vm + '%';
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Panneau réglages ⚙                                                */
+/* ------------------------------------------------------------------ */
+
+$('btn-settings').addEventListener('click', () =>
+  $('settings-panel').classList.toggle('open'));
+$('sp-close').addEventListener('click', () =>
+  $('settings-panel').classList.remove('open'));
+
+$('sp-gain-patient').addEventListener('input', function() {
+  $('sp-lbl-p').textContent = this.value + '%';
+  api('set_volume_patient', parseInt(this.value)/100);
+});
+$('sp-gain-mic').addEventListener('input', function() {
+  $('sp-lbl-m').textContent = this.value + '%';
+  api('set_volume_mic', parseInt(this.value)/100);
+});
+
+/* ------------------------------------------------------------------ */
+/*  Quitter — flux complet                                             */
+/* ------------------------------------------------------------------ */
+
+$('btn-quit').addEventListener('click', () => initiateQuit());
+
+/** Appelé aussi depuis Python (intercepte la croix Windows). */
+function handleWindowClose() { initiateQuit(); }
+
+function initiateQuit() {
+  const t = $('transcript');
+  const hasEntries = t && t.children.length > 0;
+  if (hasEntries) {
+    show($('modal-confirm'));
+  } else {
+    // Rien à sauver → fermer directement.
+    doClose();
+  }
+}
+
+$('conf-save').addEventListener('click', () => {
+  hide($('modal-confirm'));
+  startSaveFlow();
+});
+$('conf-discard').addEventListener('click', async () => {
+  hide($('modal-confirm'));
+  await doClose();
+});
+
+async function doClose() {
+  stopPolling();
+  await api('end_consultation');
+}
+
+/* ------------------------------------------------------------------ */
+/*  Flux de sauvegarde                                                 */
+/* ------------------------------------------------------------------ */
+
+function startSaveFlow() {
+  // Reset formulaire.
+  ['p-nom','p-prenom','p-ddn','p-motif'].forEach(id => $(id).value = '');
+  ['p-nom-err','p-prenom-err','p-ddn-err'].forEach(id => hide($(id)));
+  show($('modal-patient'));
+  $('p-nom').focus();
+}
+
+/* ── Formulaire patient ── */
+$('p-cancel').addEventListener('click', () => hide($('modal-patient')));
+$('p-submit').addEventListener('click', submitPatient);
+['p-nom','p-prenom','p-ddn','p-motif'].forEach(id => {
+  $(id).addEventListener('keydown', e => { if (e.key==='Enter') submitPatient(); });
+});
+
+function reqField(id, errId) {
+  const v = $(id).value.trim();
+  if (!v) { show($(errId)); $(id).focus(); return null; }
+  hide($(errId)); return v;
+}
+
+async function submitPatient() {
+  const nom    = reqField('p-nom',    'p-nom-err');
+  const prenom = reqField('p-prenom', 'p-prenom-err');
+  const ddn    = reqField('p-ddn',    'p-ddn-err');
+  if (!nom || !prenom || !ddn) return;
+  const motif = $('p-motif').value.trim();
+  await api('save_patient', nom, prenom, ddn, motif);
+  hide($('modal-patient'));
+  startProgressAndResume();
+}
+
+/* ── Progression + génération résumé ── */
+async function startProgressAndResume() {
+  $('prog-title').textContent = 'Chargement du modèle de résumé…';
+  show($('modal-progress'));
+  await api('generate_resume_async');
+  pollResumeStatus();
+}
+
+function pollResumeStatus() {
+  setTimeout(async () => {
+    const s = await api('get_resume_status');
+    if (!s) { pollResumeStatus(); return; }
+    if (s.status === 'loading') {
+      $('prog-title').textContent = 'Chargement du modèle de résumé…';
+      pollResumeStatus();
+    } else if (s.status === 'generating') {
+      $('prog-title').textContent = 'Rédaction du résumé en cours…';
+      pollResumeStatus();
+    } else if (s.status === 'done') {
+      hide($('modal-progress'));
+      $('resume-text').value = s.texte || '';
+      show($('modal-resume'));
+    } else {
+      // Erreur : on saute le résumé et on continue.
+      hide($('modal-progress'));
+      resumeValidated = '';
+      openAnnexes();
+    }
+  }, 300);
+}
+
+/* ── Éditeur résumé ── */
+$('res-cancel').addEventListener('click', () => hide($('modal-resume')));
+$('res-validate').addEventListener('click', async () => {
+  resumeValidated = $('resume-text').value.trim();
+  await api('validate_resume', resumeValidated);
+  hide($('modal-resume'));
+  openAnnexes();
+});
+
+/* ── Annexes ── */
+function openAnnexes() {
+  ['ordo','arret','autre'].forEach(k => {
+    $(('ann-'+k)).checked = false;
+    $('ann-'+k+'-body').classList.remove('open');
+    fichiers[k] = null;
+    const fn = $('fn-'+k);
+    fn.textContent = 'Aucun fichier'; fn.classList.add('empty');
+  });
+  $('ann-autre-type').value = '';
+  show($('modal-annexes'));
+}
+
+['ordo','arret','autre'].forEach(k => {
+  $('ann-'+k).addEventListener('change', function() {
+    $('ann-'+k+'-body').classList.toggle('open', this.checked);
+  });
+});
+
+async function pickFile(k) {
+  const res = await api('pick_file');
+  if (res && res.path) {
+    fichiers[k] = res.path;
+    const fn = $('fn-'+k);
+    const name = res.path.split(/[\\/]/).pop();
+    fn.textContent = name.length > 38 ? name.slice(0,35)+'…' : name;
+    fn.classList.remove('empty');
+  }
+}
+
+$('ann-skip').addEventListener('click', () => { hide($('modal-annexes')); doSave([]); });
+$('ann-continue').addEventListener('click', () => {
+  const annexes = [];
+  if ($('ann-ordo').checked)
+    annexes.push({label:'Ordonnance',         fichier: fichiers.ordo});
+  if ($('ann-arret').checked)
+    annexes.push({label:'Arrêt de travail',   fichier: fichiers.arret});
+  if ($('ann-autre').checked)
+    annexes.push({label: $('ann-autre-type').value.trim() || 'Autre document',
+                  fichier: fichiers.autre});
+  hide($('modal-annexes'));
+  doSave(annexes);
+});
+
+/* ── Sauvegarde finale ── */
+async function doSave(annexes) {
+  // Nom de fichier par défaut.
+  const infos = await api('get_patient_infos') || {};  // stub retourne _infos
+  const now   = new Date();
+  const pad   = n => String(n).padStart(2,'0');
+  const base  = [
+    nettoyer(infos.nom || 'CONSULTATION'),
+    nettoyer(infos.prenom || ''),
+    now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate()),
+    pad(now.getHours())+'h'+pad(now.getMinutes()),
+  ].filter(Boolean).join('_') + '.docx';
+
+  const fileRes = await api('open_save_dialog', base);
+  if (!fileRes || !fileRes.path) {
+    // Annulation de la boîte → revenir à l'appli (ne pas fermer).
+    return;
+  }
+  const saveRes = await api('perform_save', fileRes.path, resumeValidated, annexes);
+  if (saveRes && saveRes.ok) {
+    stopPolling();
+    await api('end_consultation');
+  } else {
+    // Erreur : on l'affiche et on reste dans l'appli.
+    show($('view-main'));
+    alert((saveRes && saveRes.error) || "L'enregistrement a échoué. Veuillez réessayer.");
+  }
+}
+
+function nettoyer(s) {
+  return (s||'').normalize('NFKD').replace(/\p{M}/gu,'').replace(/[<>:"/\\|?*\s]+/g,'-').slice(0,40);
+}
+</script>
+</body>
+</html>

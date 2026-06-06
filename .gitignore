@@ -1,0 +1,40 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Modèles (trop lourds, téléchargés au 1er lancement)
+faster-whisper-*/
+*.gguf
+bench/models/
+
+# Scripts de diagnostic et benchmark (internes)
+bench/
+diag_*.py
+scan_*.py
+meter.py
+monitor*.py
+selftest_*.py
+test_*.py
+transcription_test*.txt
+resumer_bench*.py
+
+# Config et données personnelles
+%APPDATA%/
+config.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Installeur (distribué via GitHub Releases)
+dist/installer/

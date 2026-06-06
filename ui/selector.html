@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Écho — Réglages</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="bar">
+    <span class="app-title">Écho</span>
+    <span class="flex-1"></span>
+    <span class="status-text">Réglages</span>
+  </div>
+
+  <div class="selector-wrap">
+    <div>
+      <div class="selector-title">Réglages audio</div>
+      <div class="selector-sub">Sélectionnez les périphériques pour cette consultation.</div>
+    </div>
+
+    <div class="field">
+      <div class="field-label">
+        Ce que vous entendez
+        <span class="field-sublabel">Voix du patient — sortie audio</span>
+      </div>
+      <select id="sel-output"></select>
+    </div>
+
+    <div class="field">
+      <div class="field-label">
+        Votre micro
+        <span class="field-sublabel">Voix du médecin — entrée audio</span>
+      </div>
+      <select id="sel-mic"></select>
+    </div>
+
+    <div id="banner" class="hidden"></div>
+  </div>
+
+  <div class="bar bar-bottom">
+    <button id="btn-start" class="btn btn-primary" disabled>Démarrer</button>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+onReady(async () => {
+  const devs = await api('get_devices');
+  if (!devs) return;
+  const populate = (sel, items, selected) => {
+    sel.innerHTML = '';
+    (items || []).forEach(n => {
+      const o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      if (n === selected) o.selected = true;
+      sel.appendChild(o);
+    });
+  };
+  populate($('sel-output'), devs.outputs, devs.selected_output);
+  populate($('sel-mic'),    devs.mics,    devs.selected_mic);
+  $('btn-start').disabled = false;
+});
+$('btn-start').addEventListener('click', async () => {
+  const res = await api('start', $('sel-mic').value, $('sel-output').value);
+  if (res && res.ok) { await api('navigate', 'index.html'); }
+  else { showBanner($('banner'), res?.error || 'Erreur', 'err'); }
+});
+</script>
+</body>
+</html>

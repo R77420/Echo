@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Écho — Patient</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="bar">
+    <span class="app-title">Informations patient</span>
+  </div>
+
+  <div class="form-wrap">
+    <div class="field">
+      <label class="field-label" for="f-nom">Nom <span style="color:var(--color-err)">*</span></label>
+      <input type="text" id="f-nom" placeholder="DUPONT" autocomplete="off">
+      <div class="field-err hidden" id="err-nom">Le nom est obligatoire.</div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="f-prenom">Prénom <span style="color:var(--color-err)">*</span></label>
+      <input type="text" id="f-prenom" placeholder="Marie" autocomplete="off">
+      <div class="field-err hidden" id="err-prenom">Le prénom est obligatoire.</div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="f-ddn">Date de naissance (JJ/MM/AAAA) <span style="color:var(--color-err)">*</span></label>
+      <input type="text" id="f-ddn" placeholder="15/03/1985" autocomplete="off">
+      <div class="field-err hidden" id="err-ddn">La date de naissance est obligatoire.</div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="f-motif">Motif de consultation <span style="color:var(--txt-dim);">(facultatif)</span></label>
+      <input type="text" id="f-motif" placeholder="ex. Renouvellement d'ordonnance" autocomplete="off">
+    </div>
+
+    <div id="form-banner" class="hidden"></div>
+  </div>
+
+  <div class="bar bar-bottom">
+    <button id="btn-cancel" class="btn">Annuler</button>
+    <button id="btn-ok" class="btn btn-primary">Valider</button>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+'use strict';
+function req(id, errId) {
+  const v = $(id).value.trim();
+  if (!v) { show($(errId)); $(id).focus(); return null; }
+  hide($(errId));
+  return v;
+}
+$('btn-ok').addEventListener('click', async () => {
+  const nom    = req('f-nom',    'err-nom');
+  const prenom = req('f-prenom', 'err-prenom');
+  const ddn    = req('f-ddn',    'err-ddn');
+  if (!nom || !prenom || !ddn) return;
+  const motif = $('f-motif').value.trim();
+  const res = await api('save_patient', nom, prenom, ddn, motif);
+  if (res && res.ok) await api('navigate', 'resume.html');
+  else showBanner($('form-banner'), 'Erreur lors de l\'enregistrement.', 'err');
+});
+$('btn-cancel').addEventListener('click', () => api('cancel_save'));
+onReady(() => $('f-nom').focus());
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Écho — Traitement</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="progress-wrap">
+    <div class="spinner"></div>
+    <div class="progress-title" id="prog-title">Traitement en cours…</div>
+    <div class="progress-sub" id="prog-sub">Cela peut prendre une à deux minutes selon l'ordinateur.</div>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+/* Reçoit le message de progression via get_updates() ou directement du parent. */
+onReady(async () => {
+  /* Polling d'un seul type d'événement : PROGRESS */
+  startPolling(items => {
+    const p = items.find(i => i.type === 'PROGRESS');
+    if (p) $('prog-title').textContent = p.texte;
+  }, 300);
+});
+</script>
+</body>
+</html>
