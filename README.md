@@ -29,4 +29,4 @@ Télécharger le dernier installeur depuis la page [Releases](releases). Windows
 
 ## Licence
 
-© 2026 [Ton nom]. Tous droits réservés.
+© 2026 [Rayane MOUSSA]. Tous droits réservés.
