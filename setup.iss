@@ -5,6 +5,10 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "MOUSSA Rayane"
 #define MyAppExeName "Echo.exe"
+; Dossier source du build onedir (surchargé via ISCC /DSrcDir=...).
+#ifndef SrcDir
+  #define SrcDir "dist\Echo"
+#endif
 
 [Setup]
 AppName={#MyAppName}
@@ -29,7 +33,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Tout le contenu du build onedir, recursivement.
-Source: "dist\Echo\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

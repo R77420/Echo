@@ -89,6 +89,14 @@ def _get_gain(label):
     return _GAIN_PATIENT if label == "Patient" else _GAIN_MIC
 
 
+# ---- État VAD temps réel (qui parle maintenant) ----
+# Lecture/écriture de booléens simples : atomique sous GIL, pas de lock requis.
+_speaking_now = {"medecin": False, "patient": False}
+
+def _set_speaking(label, is_speech):
+    _speaking_now["patient" if label == "Patient" else "medecin"] = bool(is_speech)
+
+
 # ----------------------------- CONFIG PERSISTANTE ----------------------------
 # Principe : ne JAMAIS planter. Toute erreur de config est avalee -> defauts.
 
@@ -144,6 +152,47 @@ def ajouter_consultation(record):
             json.dump(consultations, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+def supprimer_consultation(cid):
+    """Retire l'entrée d'id `cid` de l'historique et réécrit le fichier.
+
+    Lecture et écriture se font toujours via `with open(...)` : aucun handle
+    n'est conservé entre les appels. En cas de verrou Windows transitoire
+    (OneDrive, antivirus, indexeur), on réessaie jusqu'à 3 fois.
+
+    Renvoie l'enregistrement supprimé (dict) si trouvé, sinon None.
+    Lève PermissionError/OSError si le fichier reste inaccessible après les
+    tentatives.
+    """
+    chemin = chemin_consultations()
+    os.makedirs(dossier_config(), exist_ok=True)
+    derniere_exc = None
+    for attempt in range(3):
+        try:
+            try:
+                with open(chemin, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list):
+                    data = []
+            except FileNotFoundError:
+                data = []
+
+            supprime = None
+            restantes = []
+            for c in data:
+                if supprime is None and isinstance(c, dict) and c.get("id") == cid:
+                    supprime = c
+                else:
+                    restantes.append(c)
+
+            with open(chemin, "w", encoding="utf-8") as f:
+                json.dump(restantes, f, ensure_ascii=False, indent=2)
+            return supprime
+        except (PermissionError, OSError) as exc:
+            derniere_exc = exc
+            if attempt < 2:
+                time.sleep(0.15)
+    raise derniere_exc
 
 def message_simple(titre, message, genre="info"):
     """Affiche un message court (FR simple) sans dependre d'une fenetre existante."""
@@ -405,6 +454,7 @@ def capturer(source_factory, label):
 
                 pcm16 = (np.clip(mono, -1.0, 1.0) * 32767).astype(np.int16)
                 is_speech = vad.is_speech(pcm16.tobytes(), SAMPLE_RATE)
+                _set_speaking(label, is_speech)
 
                 if is_speech:
                     buffer.append(mono.astype(np.float32))
@@ -426,6 +476,8 @@ def capturer(source_factory, label):
     except Exception:
         display_queue.put(("AVIS",
             "Impossible de démarrer la capture (%s). Vérifiez le périphérique audio." % libelle))
+    finally:
+        _set_speaking(label, False)
 
 
 # ----------------------------- MODELE / RESSOURCES ---------------------------
@@ -1901,6 +1953,15 @@ class Api:
             items.append({"type": label, "texte": texte, "timestamp": ts})
         return items
 
+    def get_speaking_status(self):
+        """État VAD temps réel pour l'indicateur « qui parle ».
+        Appelé toutes les ~120 ms depuis le JS."""
+        return {
+            "medecin": _speaking_now.get("medecin", False),
+            "patient": _speaking_now.get("patient", False),
+            "active":  not stop_event.is_set(),
+        }
+
     # ---- Périphériques -------------------------------------------------
 
     def get_devices(self):
@@ -2277,6 +2338,43 @@ class Api:
 
     def get_consultations(self):
         return charger_consultations()
+
+    def delete_consultation(self, cid):
+        """Retire l'entrée d'id `cid` de consultations.json.
+
+        Le fichier .docx sur le disque est conservé.
+        """
+        try:
+            supprimer_consultation(cid)
+            return {"ok": True}
+        except (PermissionError, OSError):
+            return {"ok": False,
+                    "error": "Fichier temporairement inaccessible. Réessayez."}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def delete_consultation_with_file(self, cid):
+        """Retire l'entrée d'id `cid` et supprime aussi le .docx s'il existe.
+
+        Si le fichier n'existe pas/plus, l'entrée est quand même retirée
+        sans erreur.
+        """
+        try:
+            record = supprimer_consultation(cid)
+        except (PermissionError, OSError):
+            return {"ok": False,
+                    "error": "Fichier temporairement inaccessible. Réessayez."}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        try:
+            fp = (record or {}).get("file_path")
+            if fp and os.path.isfile(fp):
+                os.remove(fp)
+        except Exception:
+            # Jamais d'erreur visible si le fichier a déjà été
+            # déplacé/supprimé manuellement ou est verrouillé.
+            pass
+        return {"ok": True}
 
     # ===== FICHIERS (OS) ======================================================
 

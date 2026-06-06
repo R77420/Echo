@@ -125,6 +125,22 @@
       </div>
     </div>
 
+    <!-- Recherche dans l'historique -->
+    <div class="section" style="padding-top:8px;padding-bottom:0;">
+      <div class="search-box">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="consult-search" autocomplete="off"
+               placeholder="Rechercher par nom, prénom, motif...">
+        <button type="button" class="search-clear hidden" id="consult-search-clear"
+                title="Effacer" aria-label="Effacer">×</button>
+      </div>
+      <div class="search-count hidden" id="consult-search-count"></div>
+    </div>
+
     <!-- Consultations récentes -->
     <div class="section flex-1">
       <div class="section-title">Consultations récentes</div>
@@ -258,6 +274,21 @@
   </div>
 
 </main><!-- /content -->
+
+<!-- Modale de confirmation de suppression -->
+<div id="delete-modal" class="confirm-overlay hidden">
+  <div class="confirm-box">
+    <div class="confirm-title">Supprimer ce compte-rendu ?</div>
+    <div class="confirm-sub" id="delete-modal-sub"></div>
+    <div class="confirm-actions">
+      <button class="btn btn-secondary" id="delete-history-only">Supprimer de l'historique uniquement</button>
+      <button class="btn btn-danger" id="delete-permanent">Supprimer définitivement</button>
+      <button class="btn btn-secondary" id="delete-cancel">Annuler</button>
+    </div>
+    <div id="delete-modal-banner" class="banner banner-err confirm-banner hidden"></div>
+    <div class="confirm-note">La suppression définitive est irréversible.</div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 <script>
@@ -549,6 +580,15 @@ function renderConsultationList() {
     card.className = 'card consultation-card';
     card.dataset.id = c.id;
     card.innerHTML =
+      '<button class="card-delete" title="Supprimer" aria-label="Supprimer">' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<polyline points="3 6 5 6 21 6"></polyline>' +
+        '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>' +
+        '<path d="M10 11v6M14 11v6"></path>' +
+        '<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>' +
+        '</svg>' +
+      '</button>' +
       '<div class="card-row1">' +
         '<span class="card-patient">' + esc(nom) + '</span>' +
         '<span class="card-date">' + esc(formatDate(c.date)) + esc(dur) + '</span>' +
@@ -559,9 +599,153 @@ function renderConsultationList() {
       e.preventDefault();
       showDetail(c);
     });
+    card.querySelector('.card-delete').addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      openDeleteModal(c);
+    });
     list.appendChild(card);
   });
+  applyConsultSearch();
 }
+
+/* ---- Recherche dans l'historique ---- */
+
+function normalise(str) {
+  return (str || '').toString().toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+}
+
+/** Texte normalisé regroupant les champs recherchables d'une consultation. */
+function consultSearchText(c) {
+  const p = c.patient || {};
+  let dateStr = '';
+  try {
+    const d = new Date(c.date);
+    const pad = n => String(n).padStart(2, '0');
+    dateStr = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
+  } catch {}
+  return normalise([p.nom, p.prenom, p.motif, p.naissance, dateStr]
+    .filter(Boolean).join(' '));
+}
+
+function applyConsultSearch() {
+  const input    = $('consult-search');
+  const clearBtn = $('consult-search-clear');
+  const countEl  = $('consult-search-count');
+  const list     = $('consult-list');
+  if (!input) return;
+
+  const raw = input.value.trim();
+  const q   = normalise(raw);
+  clearBtn.classList.toggle('hidden', input.value.length === 0);
+
+  // Nettoyer un éventuel message "aucun résultat" précédent.
+  const prevEmpty = list.querySelector('.search-empty');
+  if (prevEmpty) prevEmpty.remove();
+
+  const cards = list.querySelectorAll('.consultation-card');
+
+  // Champ vide → liste complète, compteur masqué.
+  if (!q) {
+    cards.forEach(card => { card.style.display = ''; });
+    countEl.classList.add('hidden');
+    return;
+  }
+
+  let matches = 0;
+  cards.forEach(card => {
+    const c  = allConsultations.find(x => String(x.id) === card.dataset.id);
+    const ok = c ? consultSearchText(c).includes(q) : false;
+    card.style.display = ok ? '' : 'none';
+    if (ok) matches++;
+  });
+
+  const s = matches > 1 ? 's' : '';
+  countEl.textContent = matches + ' consultation' + s + ' trouvée' + s;
+  countEl.classList.remove('hidden');
+
+  if (matches === 0) {
+    const div = document.createElement('div');
+    div.className = 'empty-state search-empty';
+    div.innerHTML = '<div class="empty-state-icon">∅</div>' +
+      '<div>Aucune consultation trouvée pour « ' + esc(raw) + ' »</div>';
+    list.appendChild(div);
+  }
+}
+
+$('consult-search').addEventListener('input', applyConsultSearch);
+$('consult-search-clear').addEventListener('click', () => {
+  const input = $('consult-search');
+  input.value = '';
+  applyConsultSearch();
+  input.focus();
+});
+
+/* ---- Suppression d'une consultation ---- */
+
+let consultToDelete = null;
+
+function openDeleteModal(c) {
+  consultToDelete = c;
+  const p = c.patient || {};
+  const nom = ((p.nom || '') + ' ' + (p.prenom || '')).trim() || '—';
+  let datePart = '';
+  try {
+    const d = new Date(c.date);
+    const pad = n => String(n).padStart(2, '0');
+    datePart = ' — ' + pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
+  } catch {}
+  $('delete-modal-sub').textContent = nom + datePart;
+  clearBanner($('delete-modal-banner'));
+  show($('delete-modal'));
+}
+
+function closeDeleteModal() {
+  hide($('delete-modal'));
+  consultToDelete = null;
+}
+
+function removeCardFromList(id) {
+  const list = $('consult-list');
+  const card = list.querySelector('.consultation-card[data-id="' + id + '"]');
+  if (!card) return;
+  card.classList.add('is-removing');
+  setTimeout(() => {
+    card.remove();
+    allConsultations = allConsultations.filter(c => c.id !== id);
+    if (!list.querySelector('.consultation-card')) {
+      list.innerHTML = '<div class="empty-state">' +
+        '<div class="empty-state-icon">∅</div>' +
+        '<div>Aucune consultation enregistrée pour le moment.</div></div>';
+    }
+  }, 260);
+}
+
+async function doDelete(method) {
+  if (!consultToDelete) return;
+  const id = consultToDelete.id;
+  const btnH = $('delete-history-only'), btnP = $('delete-permanent');
+  btnH.disabled = btnP.disabled = true;
+  const res = await api(method, id);
+  btnH.disabled = btnP.disabled = false;
+  if (res && res.ok) {
+    closeDeleteModal();
+    removeCardFromList(id);
+  } else {
+    const b = $('delete-modal-banner');
+    b.textContent = (res && res.error) || 'Suppression impossible. Veuillez réessayer.';
+    show(b);
+  }
+}
+
+$('delete-history-only').addEventListener('click', () => doDelete('delete_consultation'));
+$('delete-permanent').addEventListener('click', () => doDelete('delete_consultation_with_file'));
+$('delete-cancel').addEventListener('click', closeDeleteModal);
+$('delete-modal').addEventListener('click', e => {
+  if (e.target === $('delete-modal')) closeDeleteModal();
+});
 
 /* ---- Démarrage consultation ---- */
 

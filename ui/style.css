@@ -173,19 +173,51 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 }
 
 .consultation-card {
+  position: relative;
   padding: 16px 20px;
   cursor: pointer;
-  transition: box-shadow var(--t), border-color var(--t);
+  transition: box-shadow var(--t), border-color var(--t), opacity .25s ease;
 }
 .consultation-card:hover {
   box-shadow: 0 3px 8px rgba(0,0,0,0.10);
   border-color: var(--accent);
+}
+.consultation-card.is-removing {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Bouton suppression (corbeille) — discret, visible au survol */
+.card-delete {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--txt-secondary);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t), background var(--t), color var(--t);
+}
+.consultation-card:hover .card-delete { opacity: .55; }
+.card-delete:hover {
+  opacity: 1;
+  color: var(--danger);
+  background: rgba(192,57,43,0.08);
 }
 .card-row1 {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   margin-bottom: 4px;
+  padding-right: 28px; /* réserve la place de la corbeille */
 }
 .card-patient {
   font-size: 15px;
@@ -219,6 +251,58 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   margin-bottom: 12px;
   opacity: 0.4;
 }
+
+/* ---- Modale de confirmation (thème clair) ---- */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20,30,40,0.32);
+  padding: 24px;
+}
+.confirm-overlay.hidden { display: none; }
+.confirm-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.22);
+  width: 100%;
+  max-width: 380px;
+  padding: 24px;
+}
+.confirm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--txt-primary);
+  margin-bottom: 4px;
+}
+.confirm-sub {
+  font-size: 13px;
+  color: var(--txt-secondary);
+  margin-bottom: 20px;
+}
+.confirm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.confirm-actions .btn { width: 100%; }
+.btn-danger {
+  background: var(--danger);
+  border: 1px solid var(--danger);
+  color: #fff;
+}
+.btn-danger:hover { filter: brightness(0.93); }
+.confirm-note {
+  font-size: 11px;
+  color: var(--txt-secondary);
+  text-align: center;
+  margin-top: 12px;
+}
+.confirm-banner { margin-top: 12px; }
 
 /* ---- Bouton principale consultation ---- */
 .btn-new-consult {
@@ -314,6 +398,47 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 3px rgba(42,125,79,0.12);
 }
 select { cursor: pointer; appearance: none; }
+
+/* ---- Barre de recherche historique ---- */
+.search-box { position: relative; width: 100%; }
+.search-box .search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--txt-secondary);
+  pointer-events: none;
+}
+#consult-search {
+  padding-left: 38px;
+  padding-right: 36px;
+}
+.search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--txt-secondary);
+  font-size: 18px;
+  line-height: 1;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--t), color var(--t);
+}
+.search-clear:hover { background: var(--bg-hover, rgba(0,0,0,0.05)); color: var(--txt-primary); }
+.search-count {
+  font-size: 12px;
+  color: var(--txt-secondary);
+  margin-top: 6px;
+}
 
 /* ---- Slider ---- */
 .slider-row {
@@ -472,6 +597,63 @@ input[type="range"] {
   color: var(--txt-main);
 }
 .o-status-text { font-size: 11px; color: var(--txt-dim); }
+
+/* ---- Indicateurs « qui parle » (VU-mètre VAD) ---- */
+.vu-chips { display: flex; align-items: center; gap: 8px; }
+.vu-chip {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--border);
+  font-size: 11px; font-weight: 600;
+  color: var(--txt-dim);
+  transition: color .12s ease, background .12s ease, border-color .12s ease, opacity .12s ease;
+}
+.vu-icon  { font-size: 12px; line-height: 1; filter: grayscale(1); opacity: .6; transition: filter .12s ease, opacity .12s ease; }
+.vu-label { line-height: 1; }
+
+/* Barres du VU-mètre */
+.vu-wave {
+  display: flex; align-items: center; gap: 2px;
+  height: 12px;
+}
+.wave-bar {
+  width: 2px;
+  height: 2px;                 /* hauteur minimale au repos */
+  border-radius: 1px;
+  background: currentColor;
+  transition: height 0.1s ease;
+}
+
+/* État actif : quelqu'un parle */
+.vu-chip.speaking .vu-icon { filter: none; opacity: 1; }
+.vu-chip-m.speaking {
+  color: var(--chip-m-fg);
+  background: var(--chip-m-bg);
+  border-color: rgba(52,216,153,.35);
+}
+.vu-chip-p.speaking {
+  color: var(--chip-p-fg);
+  background: var(--chip-p-bg);
+  border-color: rgba(91,176,255,.35);
+}
+.speaking .wave-bar:nth-child(1) { animation: wave 0.6s ease infinite; }
+.speaking .wave-bar:nth-child(2) { animation: wave 0.6s ease 0.15s infinite; }
+.speaking .wave-bar:nth-child(3) { animation: wave 0.6s ease 0.3s infinite; }
+@keyframes wave {
+  0%, 100% { height: 3px; }
+  50%      { height: 12px; }
+}
+
+/* État arrêté / pas démarré : les deux chips grisés, barres immobiles */
+.vu-chips.stopped .vu-chip {
+  opacity: .45;
+  color: var(--txt-dim);
+  background: transparent;
+  border-color: var(--border);
+}
+.vu-chips.stopped .vu-icon { filter: grayscale(1); opacity: .5; }
+.vu-chips.stopped .wave-bar { animation: none; height: 2px; }
 
 /* Zone transcript */
 #transcript {

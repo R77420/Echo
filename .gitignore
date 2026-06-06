@@ -10,6 +10,13 @@ build/
 dist/
 *.spec.bak
 
+# Builds temporaires (contournement de verrou)
+dist_rebuild/
+build_rebuild/
+
+# Logs de build
+*.log
+
 # Modèles (trop lourds, téléchargés au 1er lancement)
 faster-whisper-*/
 *.gguf

@@ -63,7 +63,23 @@
   <div id="transcript"></div>
 
   <!-- Barre basse -->
-  <div class="o-bar o-bar-bottom" style="justify-content:flex-end;gap:8px;">
+  <div class="o-bar o-bar-bottom" style="justify-content:space-between;gap:8px;">
+    <div class="vu-chips" id="vu-chips">
+      <div class="vu-chip vu-chip-m" id="chip-medecin">
+        <span class="vu-icon" aria-hidden="true">🎙</span>
+        <span class="vu-label">Médecin</span>
+        <span class="vu-wave">
+          <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
+        </span>
+      </div>
+      <div class="vu-chip vu-chip-p" id="chip-patient">
+        <span class="vu-icon" aria-hidden="true">🎧</span>
+        <span class="vu-label">Patient</span>
+        <span class="vu-wave">
+          <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
+        </span>
+      </div>
+    </div>
     <button id="btn-quit" class="o-btn o-btn-danger">Quitter</button>
   </div>
 </div>
@@ -284,9 +300,47 @@ onReady(async () => {
   // Démarrer le polling dès l'ouverture.
   isActive = true;
   startPolling(items => items.forEach(appendEntry), 200);
+  startSpeakingPolling();
   // Charger les péri pour le panneau settings.
   loadSettingsPanel();
 });
+
+/* ------------------------------------------------------------------ */
+/*  Indicateur « qui parle » — polling VAD (120 ms)                    */
+/* ------------------------------------------------------------------ */
+
+let _vuTimer = null;
+
+function startSpeakingPolling() {
+  stopSpeakingPolling();
+  const chips   = $('vu-chips');
+  const chipM   = $('chip-medecin');
+  const chipP   = $('chip-patient');
+  (async function loop() {
+    const s = await api('get_speaking_status');
+    if (s && s.active) {
+      chips.classList.remove('stopped');
+      chipM.classList.toggle('speaking', !!s.medecin);
+      chipP.classList.toggle('speaking', !!s.patient);
+    } else {
+      // Arrêté / pas démarré : tout grisé, barres immobiles.
+      chips.classList.add('stopped');
+      chipM.classList.remove('speaking');
+      chipP.classList.remove('speaking');
+    }
+    _vuTimer = setTimeout(loop, 120);
+  })();
+}
+
+function stopSpeakingPolling() {
+  if (_vuTimer !== null) { clearTimeout(_vuTimer); _vuTimer = null; }
+  const chips = $('vu-chips');
+  if (chips) {
+    chips.classList.add('stopped');
+    $('chip-medecin').classList.remove('speaking');
+    $('chip-patient').classList.remove('speaking');
+  }
+}
 
 async function loadSettingsPanel() {
   const devs = await api('get_devices');
@@ -351,6 +405,7 @@ $('conf-discard').addEventListener('click', async () => {
 
 async function doClose() {
   stopPolling();
+  stopSpeakingPolling();
   await api('end_consultation');
 }
 
@@ -495,6 +550,7 @@ async function doSave(annexes) {
   const saveRes = await api('perform_save', fileRes.path, resumeValidated, annexes);
   if (saveRes && saveRes.ok) {
     stopPolling();
+    stopSpeakingPolling();
     await api('end_consultation');
   } else {
     // Erreur : on l'affiche et on reste dans l'appli.
