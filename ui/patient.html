@@ -18,14 +18,12 @@
       <div class="field-err hidden" id="err-nom">Le nom est obligatoire.</div>
     </div>
     <div class="field">
-      <label class="field-label" for="f-prenom">Prénom <span style="color:var(--color-err)">*</span></label>
-      <input type="text" id="f-prenom" placeholder="Marie" autocomplete="off">
-      <div class="field-err hidden" id="err-prenom">Le prénom est obligatoire.</div>
+      <label class="field-label" for="f-prenom">Prénom <span style="color:var(--txt-dim);">(facultatif)</span></label>
+      <input type="text" id="f-prenom" placeholder="Prénom (facultatif)" autocomplete="off">
     </div>
     <div class="field">
-      <label class="field-label" for="f-ddn">Date de naissance (JJ/MM/AAAA) <span style="color:var(--color-err)">*</span></label>
-      <input type="text" id="f-ddn" placeholder="15/03/1985" autocomplete="off">
-      <div class="field-err hidden" id="err-ddn">La date de naissance est obligatoire.</div>
+      <label class="field-label" for="f-ddn">Date de naissance <span style="color:var(--txt-dim);">(facultatif)</span></label>
+      <input type="text" id="f-ddn" placeholder="JJ/MM/AAAA (facultatif)" autocomplete="off">
     </div>
     <div class="field">
       <label class="field-label" for="f-motif">Motif de consultation <span style="color:var(--txt-dim);">(facultatif)</span></label>
@@ -50,11 +48,11 @@ function req(id, errId) {
   return v;
 }
 $('btn-ok').addEventListener('click', async () => {
-  const nom    = req('f-nom',    'err-nom');
-  const prenom = req('f-prenom', 'err-prenom');
-  const ddn    = req('f-ddn',    'err-ddn');
-  if (!nom || !prenom || !ddn) return;
-  const motif = $('f-motif').value.trim();
+  const nom = req('f-nom', 'err-nom');
+  if (!nom) return;            // seul le Nom est obligatoire
+  const prenom = $('f-prenom').value.trim();
+  const ddn    = $('f-ddn').value.trim();
+  const motif  = $('f-motif').value.trim();
   const res = await api('save_patient', nom, prenom, ddn, motif);
   if (res && res.ok) await api('navigate', 'resume.html');
   else showBanner($('form-banner'), 'Erreur lors de l\'enregistrement.', 'err');

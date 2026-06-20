@@ -327,6 +327,38 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 .btn-new-consult:hover  { background: var(--accent-hov); }
 .btn-new-consult:active { transform: scale(0.98); }
 
+/* ---- Bandeau de mise à jour ---- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: 400px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--accent-lt);
+  border: 1px solid rgba(42,125,79,0.25);
+  border-radius: var(--r-md);
+  font-size: 13px;
+  color: var(--accent-hov);
+}
+.update-icon { font-weight: 700; }
+.update-text { flex: 1; min-width: 150px; }
+.btn-sm { padding: 6px 12px; font-size: 12.5px; }
+.update-progress { flex-basis: 100%; }
+.update-bar-track {
+  height: 6px; background: rgba(42,125,79,0.18);
+  border-radius: 3px; overflow: hidden; margin-top: 4px;
+}
+.update-bar {
+  height: 100%; width: 0; background: var(--accent);
+  border-radius: 3px; transition: width 0.25s ease;
+}
+.update-status {
+  display: block; font-size: 11.5px; color: var(--accent-hov);
+  margin-top: 5px;
+}
+
 /* ---- Boutons génériques ---- */
 .btn {
   display: inline-flex;
@@ -379,6 +411,7 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   color: var(--txt-secondary);
 }
 .field-required { color: var(--danger); margin-left: 2px; }
+.field-hint { font-size: 12px; color: var(--txt-secondary); margin-top: 6px; line-height: 1.5; }
 .field-err { font-size: 12px; color: var(--danger); }
 
 input[type="text"], select, textarea {
@@ -565,6 +598,13 @@ input[type="range"] {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden;            /* le conteneur ne scrolle pas : seul #transcript scrolle */
+}
+
+/* Les vues plein écran sont des colonnes flex qui doivent pouvoir rétrécir
+   (min-height:0) pour que la zone scrollable interne fonctionne. */
+#view-main, #view-selector {
+  min-height: 0;
 }
 
 /* Barres */
@@ -660,6 +700,7 @@ input[type="range"] {
   flex: 1; overflow-y: auto; padding: 12px 14px;
   display: flex; flex-direction: column; gap: 1px;
   scroll-behavior: smooth;
+  min-height: 0;   /* CRITIQUE : sans ça, flexbox laisse le contenu déborder et le footer disparaît */
 }
 #transcript::-webkit-scrollbar { width: 4px; }
 #transcript::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }

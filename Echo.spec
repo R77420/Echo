@@ -31,12 +31,22 @@ tmp_ret = collect_all('idna')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('charset_normalizer')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# Groq = moteur principal (API compatible OpenAI) + conversion WAV en mémoire.
+tmp_ret = collect_all('openai')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('soundfile')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pydantic')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 hiddenimports += [
     'huggingface_hub.utils._headers',
     'huggingface_hub.file_download',
     'huggingface_hub.hf_api',
     'huggingface_hub._snapshot_download',
+    # Clé API Groq embarquée (fichier gitignored, présent au build).
+    'GROQ_KEY',
+    'pydantic_core',
 ]
 
 

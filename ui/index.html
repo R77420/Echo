@@ -143,14 +143,12 @@
       <div class="m-err hidden" id="p-nom-err">Ce champ est obligatoire.</div>
     </div>
     <div class="m-field">
-      <label class="m-label">Prénom <span style="color:var(--color-err)">*</span></label>
-      <input type="text" class="m-input" id="p-prenom" placeholder="Marie" autocomplete="off">
-      <div class="m-err hidden" id="p-prenom-err">Ce champ est obligatoire.</div>
+      <label class="m-label">Prénom <span style="color:var(--txt-sys)">(facultatif)</span></label>
+      <input type="text" class="m-input" id="p-prenom" placeholder="Prénom (facultatif)" autocomplete="off">
     </div>
     <div class="m-field">
-      <label class="m-label">Date de naissance (JJ/MM/AAAA) <span style="color:var(--color-err)">*</span></label>
-      <input type="text" class="m-input" id="p-ddn" placeholder="15/03/1985" autocomplete="off">
-      <div class="m-err hidden" id="p-ddn-err">Ce champ est obligatoire.</div>
+      <label class="m-label">Date de naissance <span style="color:var(--txt-sys)">(facultatif)</span></label>
+      <input type="text" class="m-input" id="p-ddn" placeholder="JJ/MM/AAAA (facultatif)" autocomplete="off">
     </div>
     <div class="m-field">
       <label class="m-label">Motif de consultation <span style="color:var(--txt-sys)">(facultatif)</span></label>
@@ -168,24 +166,61 @@
   <div class="prog-wrap">
     <div class="spinner"></div>
     <div class="prog-title" id="prog-title">Chargement du modèle de résumé…</div>
-    <div class="prog-sub">Cela peut prendre une à deux minutes selon l'ordinateur.</div>
+    <div class="prog-sub">Le document est déjà enregistré. Vous pouvez continuer à travailler ; le résumé se prépare.</div>
   </div>
 </div>
 
-<!-- ── Modal : relecture résumé ── -->
+<!-- ── Modal : téléchargement du modèle de secours (hors-ligne, à la demande) ── -->
+<div class="modal-overlay hidden" id="modal-backup">
+  <div class="modal-header">Modèle de secours</div>
+  <div class="modal-body">
+    <p style="font-size:14px;line-height:1.6;color:var(--txt-main);" id="backup-msg">
+      Connexion indisponible. Pour transcrire hors-ligne, le modèle de secours
+      (1,6 Go) doit être téléchargé. Continuer ?
+    </p>
+    <div id="backup-progress-wrap" class="hidden" style="margin-top:14px;">
+      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+        <div id="backup-bar" style="width:0%;height:100%;background:var(--chip-m-fg);border-radius:3px;transition:width .3s;"></div>
+      </div>
+      <div id="backup-status" style="font-size:12px;color:var(--txt-dim);margin-top:8px;text-align:center;">Préparation…</div>
+    </div>
+  </div>
+  <div class="modal-footer" id="backup-actions">
+    <button class="o-btn" id="backup-later">Plus tard</button>
+    <button class="o-btn o-btn-primary" id="backup-go">Continuer</button>
+  </div>
+</div>
+
+<!-- ── Modal : proposition de résumé (optionnel, non bloquant) ── -->
+<div class="modal-overlay hidden" id="modal-ask-resume">
+  <div class="modal-header">Générer un résumé automatique ?</div>
+  <div class="modal-body">
+    <p style="font-size:14px;line-height:1.6;color:var(--txt-main);">
+      Le compte-rendu a été <strong>enregistré</strong> avec la transcription complète.<br>
+      Souhaitez-vous générer un résumé automatique ? Cela peut prendre quelques
+      minutes — vous pouvez continuer à travailler pendant ce temps.
+    </p>
+  </div>
+  <div class="modal-footer">
+    <button class="o-btn" id="ask-resume-no">Non, terminer</button>
+    <button class="o-btn o-btn-primary" id="ask-resume-yes">Oui, générer</button>
+  </div>
+</div>
+
+<!-- ── Modal : résumé prêt — relecture et ajout au document ── -->
 <div class="modal-overlay hidden" id="modal-resume"
      style="flex-direction:column;">
-  <div class="modal-header">Résumé — à relire et corriger</div>
+  <div class="modal-header">Résumé prêt — à relire et ajouter au document</div>
   <div style="padding:10px 16px;background:rgba(210,153,34,.08);
        border-bottom:1px solid rgba(210,153,34,.18);
        font-size:12px;color:var(--color-warn);flex-shrink:0;">
-    ⚠&nbsp; Résumé généré automatiquement. Relisez, corrigez si nécessaire, puis validez.
-    La transcription mot à mot est toujours conservée dans le fichier.
+    ⚠&nbsp; Résumé généré automatiquement. Relisez et corrigez si nécessaire avant
+    de l'ajouter. Le document et la transcription mot à mot sont déjà enregistrés.
   </div>
   <textarea id="resume-text" style="flex:1;"></textarea>
   <div class="modal-footer">
-    <button class="o-btn" id="res-cancel">Annuler</button>
-    <button class="o-btn o-btn-primary" id="res-validate">Valider →</button>
+    <button class="o-btn" id="res-cancel">Ignorer</button>
+    <button class="o-btn o-btn-primary" id="res-validate">Ajouter au document</button>
   </div>
 </div>
 
@@ -258,7 +293,6 @@
 /* ------------------------------------------------------------------ */
 
 const fichiers = { ordo: null, arret: null, autre: null };
-let resumeValidated = '';
 let isActive = false;  // vrai dès que start() a réussi
 
 /* ------------------------------------------------------------------ */
@@ -299,11 +333,74 @@ onReady(async () => {
   show($('view-main'));
   // Démarrer le polling dès l'ouverture.
   isActive = true;
-  startPolling(items => items.forEach(appendEntry), 200);
+  startPolling(items => items.forEach(handleUpdate), 200);
   startSpeakingPolling();
   // Charger les péri pour le panneau settings.
   loadSettingsPanel();
 });
+
+/* Traite chaque update : intercepte les signaux de contrôle, sinon affiche. */
+function handleUpdate(item) {
+  if (item && item.type === 'BESOIN_SECOURS') {
+    promptBackupDownload(item.texte);
+    return;   // ne pas afficher comme une entrée de transcription
+  }
+  appendEntry(item);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Modèle de secours hors-ligne — téléchargement à la demande         */
+/* ------------------------------------------------------------------ */
+
+let _backupShown = false;
+let _backupPollId = null;
+
+function fmtBytes(b) {
+  const mo = (b || 0) / (1024 * 1024);
+  return (mo < 10 ? mo.toFixed(1) : Math.round(mo)) + ' Mo';
+}
+
+function promptBackupDownload(msg) {
+  if (_backupShown) return;            // une seule fois par consultation
+  _backupShown = true;
+  if (msg) $('backup-msg').textContent = msg;
+  $('backup-progress-wrap').classList.add('hidden');
+  show($('backup-actions'));
+  show($('modal-backup'));
+}
+
+$('backup-later').addEventListener('click', () => hide($('modal-backup')));
+$('backup-go').addEventListener('click', async () => {
+  hide($('backup-actions'));
+  show($('backup-progress-wrap'));
+  const st = await api('start_backup_download');
+  if (st && st.ready) { hide($('modal-backup')); return; }
+  pollBackup();
+});
+
+function pollBackup() {
+  _backupPollId = setTimeout(async () => {
+    const s = await api('backup_model_status');
+    if (s) {
+      if (s.present) {
+        $('backup-bar').style.width = '100%';
+        $('backup-status').textContent = 'Modèle de secours prêt ✓';
+        setTimeout(() => hide($('modal-backup')), 600);
+        return;
+      }
+      const w = s.whisper || {};
+      const pct = Math.min(100, Math.max(0, (w.downloaded / (w.total || 1)) * 100));
+      $('backup-bar').style.width = pct.toFixed(0) + '%';
+      if (w.error) {
+        $('backup-status').textContent = w.error;
+      } else {
+        $('backup-status').textContent =
+          fmtBytes(w.downloaded) + ' / ' + fmtBytes(w.total);
+      }
+    }
+    pollBackup();
+  }, 800);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Indicateur « qui parle » — polling VAD (120 ms)                    */
@@ -416,7 +513,7 @@ async function doClose() {
 function startSaveFlow() {
   // Reset formulaire.
   ['p-nom','p-prenom','p-ddn','p-motif'].forEach(id => $(id).value = '');
-  ['p-nom-err','p-prenom-err','p-ddn-err'].forEach(id => hide($(id)));
+  hide($('p-nom-err'));
   show($('modal-patient'));
   $('p-nom').focus();
 }
@@ -435,18 +532,30 @@ function reqField(id, errId) {
 }
 
 async function submitPatient() {
-  const nom    = reqField('p-nom',    'p-nom-err');
-  const prenom = reqField('p-prenom', 'p-prenom-err');
-  const ddn    = reqField('p-ddn',    'p-ddn-err');
-  if (!nom || !prenom || !ddn) return;
-  const motif = $('p-motif').value.trim();
+  // Seul le Nom est obligatoire ; les autres champs sont facultatifs.
+  const nom = reqField('p-nom', 'p-nom-err');
+  if (!nom) return;
+  const prenom = $('p-prenom').value.trim();
+  const ddn    = $('p-ddn').value.trim();
+  const motif  = $('p-motif').value.trim();
   await api('save_patient', nom, prenom, ddn, motif);
   hide($('modal-patient'));
-  startProgressAndResume();
+  // Étape annexes, puis enregistrement IMMÉDIAT du transcript (résumé optionnel ensuite).
+  openAnnexes();
 }
 
-/* ── Progression + génération résumé ── */
-async function startProgressAndResume() {
+/* ── Résumé : proposition optionnelle et non bloquante ──
+   Le document est déjà enregistré quand cette modale s'affiche. */
+$('ask-resume-no').addEventListener('click', async () => {
+  hide($('modal-ask-resume'));
+  await doClose();
+});
+$('ask-resume-yes').addEventListener('click', () => {
+  hide($('modal-ask-resume'));
+  startResumeBackground();
+});
+
+async function startResumeBackground() {
   $('prog-title').textContent = 'Chargement du modèle de résumé…';
   show($('modal-progress'));
   await api('generate_resume_async');
@@ -468,21 +577,30 @@ function pollResumeStatus() {
       $('resume-text').value = s.texte || '';
       show($('modal-resume'));
     } else {
-      // Erreur : on saute le résumé et on continue.
+      // Erreur de génération : le document est déjà sauvegardé → on termine.
       hide($('modal-progress'));
-      resumeValidated = '';
-      openAnnexes();
+      alert("Le résumé n'a pas pu être généré. Le compte-rendu reste enregistré avec la transcription complète.");
+      await doClose();
     }
   }, 300);
 }
 
-/* ── Éditeur résumé ── */
-$('res-cancel').addEventListener('click', () => hide($('modal-resume')));
-$('res-validate').addEventListener('click', async () => {
-  resumeValidated = $('resume-text').value.trim();
-  await api('validate_resume', resumeValidated);
+/* ── Résumé prêt : ajouter au document, ou ignorer ── */
+$('res-cancel').addEventListener('click', async () => {   // « Ignorer »
   hide($('modal-resume'));
-  openAnnexes();
+  await doClose();
+});
+$('res-validate').addEventListener('click', async () => { // « Ajouter au document »
+  const texte = $('resume-text').value.trim();
+  $('res-validate').disabled = true;
+  const res = await api('finalize_with_resume', texte);
+  $('res-validate').disabled = false;
+  if (res && res.ok) {
+    hide($('modal-resume'));
+    await doClose();
+  } else {
+    alert((res && res.error) || "Impossible d'ajouter le résumé au document. Le compte-rendu reste enregistré.");
+  }
 });
 
 /* ── Annexes ── */
@@ -515,7 +633,7 @@ async function pickFile(k) {
   }
 }
 
-$('ann-skip').addEventListener('click', () => { hide($('modal-annexes')); doSave([]); });
+$('ann-skip').addEventListener('click', () => { hide($('modal-annexes')); doInitialSave([]); });
 $('ann-continue').addEventListener('click', () => {
   const annexes = [];
   if ($('ann-ordo').checked)
@@ -526,13 +644,15 @@ $('ann-continue').addEventListener('click', () => {
     annexes.push({label: $('ann-autre-type').value.trim() || 'Autre document',
                   fichier: fichiers.autre});
   hide($('modal-annexes'));
-  doSave(annexes);
+  doInitialSave(annexes);
 });
 
-/* ── Sauvegarde finale ── */
-async function doSave(annexes) {
+/* ── Sauvegarde IMMÉDIATE du transcript (sans résumé) ──
+   Le document est toujours écrit ici ; le résumé est proposé ensuite,
+   en option, et n'a jamais bloqué cette sauvegarde. */
+async function doInitialSave(annexes) {
   // Nom de fichier par défaut.
-  const infos = await api('get_patient_infos') || {};  // stub retourne _infos
+  const infos = await api('get_patient_infos') || {};
   const now   = new Date();
   const pad   = n => String(n).padStart(2,'0');
   const base  = [
@@ -547,11 +667,11 @@ async function doSave(annexes) {
     // Annulation de la boîte → revenir à l'appli (ne pas fermer).
     return;
   }
-  const saveRes = await api('perform_save', fileRes.path, resumeValidated, annexes);
+  // Sauvegarde sans résumé (résumé = '').
+  const saveRes = await api('perform_save', fileRes.path, '', annexes);
   if (saveRes && saveRes.ok) {
-    stopPolling();
-    stopSpeakingPolling();
-    await api('end_consultation');
+    // Document enregistré : proposer le résumé (non bloquant).
+    show($('modal-ask-resume'));
   } else {
     // Erreur : on l'affiche et on reste dans l'appli.
     show($('view-main'));

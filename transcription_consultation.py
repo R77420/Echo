@@ -31,7 +31,6 @@ SELECTION DU PERIPHERIQUE
 
 import datetime
 import json
-import multiprocessing
 import os
 import queue
 import re
@@ -52,12 +51,23 @@ from faster_whisper import WhisperModel
 
 # ----------------------------- PARAMETRES ------------------------------------
 
+APP_VERSION = "1.2.0"   # version courante (mise à jour auto au démarrage)
+GITHUB_REPO = "R77420/Echo"
+
+# Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
+# Gérée par l'éditeur ; jamais affichée dans l'UI ni écrite dans les logs.
+try:
+    from GROQ_KEY import GROQ_API_KEY
+except Exception:
+    GROQ_API_KEY = ""
+
 MODEL_SIZE   = "large-v3-turbo"  # bench: RTF 0.95 sur CPU, meilleur que small sur vocab médical
 DEVICE       = "cpu"       # "cuda" si carte NVIDIA disponible
 COMPUTE_TYPE = "int8"      # "int8" sur CPU, "float16" sur GPU
 LANGUAGE     = "fr"
 
 # Noms des modèles (plus embarqués dans l'exe — téléchargés dans %APPDATA%\Echo\models\)
+# Un seul modèle pour tout le monde : large-v3-turbo (beam=1 → rapide même sur CPU faible).
 MODELE_WHISPER_DIR  = "faster-whisper-large-v3-turbo"
 MODELE_EMBARQUE     = MODELE_WHISPER_DIR   # compatibilité ancienne constante
 
@@ -71,10 +81,11 @@ MIC_NAME         = None    # force le micro sans GUI (None = afficher la liste)
 SAMPLE_RATE   = 16000      # impose par Whisper et webrtcvad
 FRAME_MS      = 30         # webrtcvad accepte 10/20/30 ms
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000   # 480 echantillons
-VAD_LEVEL     = 2          # 0 (permissif) .. 3 (agressif sur le bruit)
-SILENCE_MS    = 700        # silence qui marque la fin d'un tour de parole
-MIN_SPEECH_MS = 300        # ignore les bruits trop courts
-MAX_SEG_MS    = 15000      # flush force pour ne pas accumuler indefiniment
+VAD_LEVEL     = 3          # 0 (permissif) .. 3 (agressif sur le bruit) — strict anti-hallucination
+SILENCE_MS    = 350        # silence qui marque la fin d'un tour de parole (coupe tôt → affichage plus fréquent)
+MIN_SPEECH_MS = 500        # ignore les bruits trop courts (segments plus longs = moins de bruit)
+RMS_MIN       = 0.015      # énergie minimale d'un segment ; en dessous = quasi-silence ignoré (hallucination probable)
+MAX_SEG_MS    = 4000       # flush force : le texte apparait au moins toutes les 4 s
 
 stop_event = threading.Event()
 segment_queue = queue.Queue()
@@ -193,6 +204,36 @@ def supprimer_consultation(cid):
             if attempt < 2:
                 time.sleep(0.15)
     raise derniere_exc
+
+
+def maj_consultation_resume(cid, resume):
+    """Met à jour le champ `summary` de l'entrée d'id `cid` (best-effort avec
+    retry sur verrou Windows). Utilisé quand le résumé est ajouté après coup."""
+    chemin = chemin_consultations()
+    os.makedirs(dossier_config(), exist_ok=True)
+    derniere_exc = None
+    for attempt in range(3):
+        try:
+            try:
+                with open(chemin, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list):
+                    data = []
+            except FileNotFoundError:
+                data = []
+            for c in data:
+                if isinstance(c, dict) and c.get("id") == cid:
+                    c["summary"] = resume or ""
+                    break
+            with open(chemin, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return
+        except (PermissionError, OSError) as exc:
+            derniere_exc = exc
+            if attempt < 2:
+                time.sleep(0.15)
+    raise derniere_exc
+
 
 def message_simple(titre, message, genre="info"):
     """Affiche un message court (FR simple) sans dependre d'une fenetre existante."""
@@ -532,212 +573,42 @@ def chemin_modele():
     return MODEL_SIZE
 
 
-# ----------------------------- RÉSUMÉ (LLM local) ----------------------------
-# Conception figee en Phase 2a : gabarit fixe, regle anti-invention, 2 exemples
-# one-shot, temperature basse, et filets de securite cote code.
+# ----------------------------- RÉSUMÉ (Groq LLM + fallback Qwen local) ---------
+# Primaire : Groq LLM (3 s, qualité Llama 70B)
+# Fallback : Qwen 2.5-3B local (si pas de réseau)
 
-RESUME_GGUF        = "Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-RESUME_SEED        = 42
-RESUME_TEMPERATURE = 0.1
-RESUME_TOP_P       = 0.9
-RESUME_MAX_TOKENS  = 450
-
-# Avertissement non negociable, ajoute PAR LE CODE (toujours exact).
-ENTETE_RESUME = "RÉSUMÉ (généré automatiquement — à relire et corriger)"
-
-RESUME_TITRES = [
-    "Motif :",
-    "Observations / points clés :",
-    "Traitements et prescriptions évoqués :",
-    "Suivi et recommandations :",
-]
-
-# Formules de politesse / cloture, jamais cliniques -> retirees cote code.
-RESUME_POLITESSE = re.compile(
-    r"bonne (journée|soirée|saison|continuation|route)|"
-    r"prendre soin|prenez soin|au revoir|à bient[oô]t|portez-vous bien|"
-    r"bonne fin de", re.IGNORECASE)
-
-RESUME_SYSTEM = (
-    "Tu es un assistant médical. Tu rédiges le compte-rendu d'une consultation "
-    "à partir de sa transcription.\n\n"
-    "RÈGLES IMPÉRATIVES :\n"
-    "- Utilise UNIQUEMENT les informations présentes dans la transcription. "
-    "N'invente aucun diagnostic, médicament, posologie ni chiffre non énoncé.\n"
-    "- Rédige de façon impersonnelle, à la troisième personne. Ne t'adresse JAMAIS "
-    "au patient (n'emploie jamais « vous »).\n"
-    "- Respecte les négations : un symptôme nié par le patient ne doit JAMAIS "
-    "apparaître comme présent ; écris-le sous forme négative claire "
-    "(ex. « Pas de toux, pas de fièvre »).\n"
-    "- Chaque section est une liste de puces courtes commençant par « - », même "
-    "s'il n'y a qu'un seul élément.\n"
-    "- Ignore les salutations et formules de politesse (bonjour, au revoir, merci, "
-    "bonne journée, prenez soin de vous, etc.) : elles n'apparaissent pas dans le "
-    "compte-rendu.\n"
-    "- Si, et seulement si, une section ne contient réellement aucune information "
-    "dans la transcription, écris sur une seule ligne, sans puce : Non précisé. "
-    "Ne déduis rien, n'extrapole aucune recommandation non formulée.\n"
-    "- Aucune phrase d'introduction ni de conclusion, aucun autre titre que les "
-    "quatre imposés.\n\n"
-    "CONTENU DE CHAQUE SECTION :\n"
-    "- Motif : la raison de la consultation.\n"
-    "- Observations / points clés : symptômes et plaintes décrits par le patient "
-    "ET résultats de l'examen clinique (auscultation, tension, poids, etc.).\n"
-    "- Traitements et prescriptions évoqués : médicaments, examens prescrits, "
-    "orientations vers un spécialiste.\n"
-    "- Suivi et recommandations : prochain rendez-vous, consignes de surveillance, "
-    "conduite à tenir en cas d'aggravation.\n\n"
-    "FORMAT — réponds EXACTEMENT avec ces quatre titres, dans cet ordre, suivis "
-    "de deux points :\n\n"
-    "Motif :\n"
-    "Observations / points clés :\n"
-    "Traitements et prescriptions évoqués :\n"
-    "Suivi et recommandations :"
-)
-
-RESUME_ONESHOT1_USER = (
-    "Transcription de la consultation :\n\n"
-    "[09:00:00] Médecin : Bonjour, qu'est-ce qui vous amène ?\n"
-    "[09:00:05] Patient : J'ai mal à la gorge depuis deux jours, avec un peu de fièvre.\n"
-    "[09:00:12] Médecin : Pas de toux, pas de gêne pour respirer ?\n"
-    "[09:00:16] Patient : Non, pas de toux, je respire bien.\n"
-    "[09:00:22] Médecin : La gorge est rouge, les ganglions du cou sont un peu gonflés. "
-    "Température 38,2.\n"
-    "[09:00:40] Médecin : C'est une angine probablement virale. Paracétamol 1 gramme "
-    "si douleur ou fièvre, trois fois par jour maximum.\n"
-    "[09:00:55] Médecin : Reposez-vous, buvez beaucoup. Si la fièvre dépasse trois "
-    "jours, revenez consulter.\n\n"
-    "Rédige le compte-rendu selon le format imposé."
-)
-RESUME_ONESHOT1_ASSISTANT = (
-    "Motif :\n"
-    "- Mal de gorge depuis deux jours avec fièvre.\n\n"
-    "Observations / points clés :\n"
-    "- Gorge rouge, ganglions cervicaux légèrement gonflés.\n"
-    "- Température à 38,2 °C.\n"
-    "- Pas de toux, pas de gêne respiratoire.\n\n"
-    "Traitements et prescriptions évoqués :\n"
-    "- Paracétamol 1 g si douleur ou fièvre, trois fois par jour maximum.\n\n"
-    "Suivi et recommandations :\n"
-    "- Repos et hydratation abondante.\n"
-    "- Reconsulter si la fièvre dépasse trois jours."
-)
-RESUME_ONESHOT2_USER = (
-    "Transcription de la consultation :\n\n"
-    "[10:00:00] Médecin : Bonjour, je vous écoute.\n"
-    "[10:00:04] Patient : Je voulais juste savoir si je peux prendre du paracétamol "
-    "avec mon traitement habituel.\n"
-    "[10:00:10] Médecin : Oui, c'est compatible, aucun problème.\n"
-    "[10:00:15] Patient : Parfait, merci, c'était seulement ça.\n"
-    "[10:00:18] Médecin : Très bien, bonne journée.\n\n"
-    "Rédige le compte-rendu selon le format imposé."
-)
-RESUME_ONESHOT2_ASSISTANT = (
-    "Motif :\n"
-    "- Question sur la compatibilité du paracétamol avec le traitement habituel.\n\n"
-    "Observations / points clés :\n"
-    "Non précisé\n\n"
-    "Traitements et prescriptions évoqués :\n"
-    "Non précisé\n\n"
-    "Suivi et recommandations :\n"
-    "Non précisé"
-)
-
-_resume_llm = None
-_resume_lock = threading.Lock()
-
-
-def chemin_modele_resume():
-    """Résolution du chemin Qwen (.gguf) :
-      - APPDATA (runtime, frozen ou dev après téléchargement)
-      - Dev : bench/models/ local (workflow dev intact)
-    """
-    # 1. APPDATA
-    if qwen_ok():
-        return os.path.join(models_dir(), RESUME_GGUF)
-    # 2. Dev local
-    if not getattr(sys, "frozen", False):
-        dev = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "bench", "models", RESUME_GGUF)
-        if os.path.isfile(dev):
-            return dev
-    raise FileNotFoundError(RESUME_GGUF)
-
-
-def charger_modele_resume():
-    """Charge le modele UNE fois et le garde en memoire pour toute la session
-    (rechargement evite si la generation est relancee). Thread-safe."""
-    global _resume_llm
-    with _resume_lock:
-        if _resume_llm is None:
-            from llama_cpp import Llama
-            _resume_llm = Llama(
-                model_path=chemin_modele_resume(), n_ctx=8192,
-                n_threads=multiprocessing.cpu_count(),
-                seed=RESUME_SEED, verbose=False)
-        return _resume_llm
-
-
-def _normaliser_resume(corps):
-    """Garantit chaque titre sur sa propre ligne, retire les puces de politesse
-    et les lignes vides multiples."""
-    for t in RESUME_TITRES:
-        corps = corps.replace(t, "\n" + t + "\n")
-    lignes = []
-    for l in corps.splitlines():
-        l = l.rstrip()
-        if l.lstrip().startswith("-") and RESUME_POLITESSE.search(l):
-            continue
-        if l == "" and (not lignes or lignes[-1] == ""):
-            continue
-        lignes.append(l)
-    return "\n".join(lignes).strip()
-
-
-def generer_resume(llm, transcript):
-    """Genere le resume structure (en-tete fixe + 4 sections normalisees)."""
-    out = llm.create_chat_completion(
-        messages=[
-            {"role": "system", "content": RESUME_SYSTEM},
-            {"role": "user", "content": RESUME_ONESHOT1_USER},
-            {"role": "assistant", "content": RESUME_ONESHOT1_ASSISTANT},
-            {"role": "user", "content": RESUME_ONESHOT2_USER},
-            {"role": "assistant", "content": RESUME_ONESHOT2_ASSISTANT},
-            {"role": "user",
-             "content": "Transcription de la consultation :\n\n" + transcript
-                        + "\n\nRédige le compte-rendu selon le format imposé."},
-        ],
-        temperature=RESUME_TEMPERATURE,
-        top_p=RESUME_TOP_P,
-        max_tokens=RESUME_MAX_TOKENS,
-        seed=RESUME_SEED,
-    )
-    corps = _normaliser_resume(out["choices"][0]["message"]["content"].strip())
-    return ENTETE_RESUME + "\n\n" + corps
+from resume import groq_summarize, local_summarize, RESUME_GGUF, ENTETE_RESUME
 
 
 # ----------------------------- PARAMÈTRES WHISPER ----------------------------
 
-# ~80 termes médicaux / médicaments pour guider le tokenizer Whisper.
-# Ajouter ici toute orthographe que le modèle small manque régulièrement.
+# Lexique médical condensé (~700 chars) pour guider Whisper. Tenu sous ~730
+# caractères afin que, combiné au contexte dynamique (~150), le prompt reste
+# sous la limite Groq de 896 octets UTF-8. Priorité : médicaments les plus
+# prescrits en France (sans doublons marque/générique), symptômes et examens
+# courants, termes de consultation. (Pas de médicaments rares ni de spécialités.)
 WHISPER_INITIAL_PROMPT = (
-    # Médicaments courants
-    "Doliprane, paracétamol, ibuprofène, amoxicilline, Augmentin, Efferalgan, "
-    "Spasfon, Ventoline, Smecta, Toplexil, Pivalone, Xyzall, Voltaren, Dafalgan, "
-    "metformine, amlodipine, bisoprolol, ramipril, atorvastatine, lévothyroxine, "
-    "oméprazole, pantoprazole, Inexium, Kardégic, Plavix, Eliquis, Xarelto, "
-    "corticoïdes, antibiotique, antihistaminique, bronchodilatateur, "
-    # Termes cliniques
-    "auscultation, palpations, palpitations, dyspnée, essoufflement, "
-    "tachycardie, bradycardie, hypertension, hypotension, saturation, "
-    "fièvre, frissons, nausées, vomissements, diarrhée, constipation, "
-    "céphalées, vertiges, syncope, œdème, cicatrisation, inflammation, "
-    "infection, allergie, diabète, "
-    # Examens et actes
-    "bilan sanguin, NFS, ferritine, CRP, TSH, échographie, radio, scanner, IRM, "
-    "ordonnance, renouvellement, arrêt de travail, certificat médical, "
-    "vaccination, rappel, consultation, tension artérielle."
+    "Consultation médicale en français, médecin généraliste. "
+    # Médicaments les plus prescrits
+    "Médicaments : Doliprane, paracétamol, Efferalgan, ibuprofène, Advil, "
+    "amoxicilline, Augmentin, Oméprazole, Tramadol, Cortancyl, Ventoline, "
+    "Symbicort, Levothyrox, metformine, Jardiance, amlodipine, bisoprolol, "
+    "ramipril, furosémide, atorvastatine, Eliquis, Plavix, Lexomil, Zolpidem, "
+    "sertraline. "
+    # Examens et actes clés
+    "Examens : NFS, glycémie, HbA1c, TSH, CRP, créatinine, ECG, échographie, "
+    "scanner, IRM, ECBU, saturation, SpO2, tension artérielle. "
+    # Termes de consultation
+    "Termes : ordonnance, renouvellement, arrêt de travail, antécédents, "
+    "allergie, posologie, traitement en cours, Sécurité Sociale, mutuelle. "
+    # Symptômes courants
+    "Symptômes : fièvre, toux, céphalées, dyspnée, nausées, vertiges, fatigue, "
+    "palpitations, douleurs abdominales."
 )
+
+# Limite de prompt imposée par l'API Groq (whisper-large-v3) : 896 « caractères »
+# comptés en octets UTF-8. On vise une marge sous cette limite.
+GROQ_PROMPT_MAX_BYTES = 880
 
 # Dictionnaire de corrections post-transcription.
 # Clés : erreurs connues du modèle small en français médical (insensibles à la casse).
@@ -799,12 +670,143 @@ def corriger_transcription(texte):
 
 # ----------------------------- TRANSCRIPTION ---------------------------------
 
+# Contexte dynamique : dernières transcriptions, injectées dans le prompt Groq
+# pour améliorer la cohérence (noms, médicaments répétés…). Thread-safe.
+_dernier_contexte = ""
+_contexte_lock    = threading.Lock()
+
+
+def _maj_contexte(texte):
+    """Ajoute `texte` au contexte glissant (300 derniers caractères)."""
+    global _dernier_contexte
+    with _contexte_lock:
+        _dernier_contexte = (_dernier_contexte + " " + texte).strip()[-300:]
+
+
+def _reset_contexte():
+    global _dernier_contexte
+    with _contexte_lock:
+        _dernier_contexte = ""
+
+
+def _rms(audio):
+    """Énergie RMS d'un segment audio (numpy float). 0.0 si vide/erreur.
+    Un quasi-silence (RMS faible) fait halluciner Whisper ; une vraie voix
+    (« Merci » réellement prononcé) a un RMS élevé et passe normalement."""
+    try:
+        if audio is None or len(audio) == 0:
+            return 0.0
+        return float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+    except Exception:
+        return 0.0
+
+
+def _init_cloud_client():
+    """Initialise le client Groq (API compatible OpenAI, modèle whisper
+    large-v3-turbo). Clé gérée par l'éditeur (GROQ_API_KEY). Renvoie le client
+    ou None si la clé ou la librairie est indisponible."""
+    if not GROQ_API_KEY:
+        return None
+    try:
+        import openai
+        return openai.OpenAI(api_key=GROQ_API_KEY,
+                             base_url="https://api.groq.com/openai/v1")
+    except Exception:
+        return None
+
+
+def modele_local_present():
+    """Vrai si le modèle Whisper local (filet hors-ligne) est disponible
+    (APPDATA après téléchargement, ou dossier local en dev)."""
+    if whisper_ok():
+        return True
+    if not getattr(sys, "frozen", False):
+        local = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             MODELE_WHISPER_DIR)
+        if os.path.isdir(local) and os.path.isfile(os.path.join(local, "model.bin")):
+            return True
+    return False
+
+
+def _charger_modele_local():
+    """Charge le modèle Whisper local. Renvoie le modèle ou None.
+    À n'appeler que si modele_local_present() est vrai (évite tout
+    téléchargement HF implicite)."""
+    try:
+        return WhisperModel(chemin_modele(), device=DEVICE, compute_type=COMPUTE_TYPE)
+    except Exception:
+        return None
+
+
+def _transcrire_local(model, audio):
+    """Transcrit un segment avec le modèle local (beam=1)."""
+    segments, _ = model.transcribe(
+        audio, language=LANGUAGE, vad_filter=True,
+        beam_size=1,
+        condition_on_previous_text=True,
+        initial_prompt=WHISPER_INITIAL_PROMPT,
+    )
+    return "".join(s.text for s in segments)
+
+
+def _transcrire_cloud(client, audio):
+    """Transcrit un segment via l'API Groq (whisper-large-v3). Lève si échec.
+    Le prompt combine le lexique médical et le contexte récent (cohérence)."""
+    import io
+    import soundfile as sf
+    buf = io.BytesIO()
+    sf.write(buf, audio, SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    buf.seek(0)
+    buf.name = "audio.wav"
+
+    with _contexte_lock:
+        ctx = _dernier_contexte
+    prompt_complet = WHISPER_INITIAL_PROMPT
+    if ctx:
+        prompt_complet = ctx[-150:] + " " + WHISPER_INITIAL_PROMPT
+    # Groq compte la limite en octets UTF-8 (accents = 2 octets) : on tronque
+    # sur cette base, en conservant le contexte récent (placé en tête).
+    enc = prompt_complet.encode("utf-8")
+    if len(enc) > GROQ_PROMPT_MAX_BYTES:
+        prompt_complet = enc[:GROQ_PROMPT_MAX_BYTES].decode("utf-8", "ignore")
+
+    response = client.audio.transcriptions.create(
+        model="whisper-large-v3",
+        file=buf,
+        language=LANGUAGE,
+        prompt=prompt_complet,
+    )
+    return response.text
+
+
 def transcrire():
-    """Worker unique : consomme les segments et les transcrit (modele non concurrent)."""
-    source = chemin_modele()
-    display_queue.put(("INFO", "Chargement du modele (" + source + ")..."))
-    model = WhisperModel(source, device=DEVICE, compute_type=COMPUTE_TYPE)
-    display_queue.put(("INFO", "Pret. La transcription demarre."))
+    """Worker unique : consomme les segments et les transcrit.
+
+    Groq (whisper-large-v3-turbo) est le moteur PRINCIPAL. En cas d'erreur
+    (connexion, quota…), repli automatique sur le modèle local turbo :
+      - si le modèle local est présent → message sobre + transcription locale ;
+      - s'il est absent → on signale à l'overlay qu'un téléchargement de secours
+        est requis (à la demande uniquement, 1,6 Go).
+    Le modèle local n'est chargé que lorsqu'il devient nécessaire (paresseux)."""
+    _reset_contexte()          # nouveau contexte glissant pour cette consultation
+    cloud_client    = _init_cloud_client()
+    cloud_on        = cloud_client is not None
+    local_model     = None     # chargé paresseusement au 1er repli
+    fallback_warned = False     # avertir « repli local » une seule fois
+    backup_signaled = False     # signaler « téléchargement requis » une seule fois
+
+    if cloud_on:
+        display_queue.put(("INFO", "Transcription prête (Groq)."))
+    else:
+        # Pas de clé : on s'appuie directement sur le modèle local s'il existe.
+        if modele_local_present():
+            local_model = _charger_modele_local()
+        if local_model is not None:
+            display_queue.put(("INFO", "Pret. La transcription demarre (local)."))
+        else:
+            display_queue.put(("BESOIN_SECOURS",
+                "Téléchargement du modèle de secours requis (1,6 Go). Continuer ?"))
+            backup_signaled = True
 
     while not stop_event.is_set():
         try:
@@ -812,14 +814,36 @@ def transcrire():
         except queue.Empty:
             continue
 
-        segments, _ = model.transcribe(
-            audio, language=LANGUAGE, vad_filter=True,
-            beam_size=3,
-            condition_on_previous_text=True,
-            initial_prompt=WHISPER_INITIAL_PROMPT,
-        )
-        texte = corriger_transcription("".join(s.text for s in segments).strip())
+        # Seuil d'énergie : un quasi-silence génère des hallucinations
+        # (« Merci » fantômes). On l'ignore sans appel API ni transcription.
+        if _rms(audio) < RMS_MIN:
+            continue
+
+        texte = None
+        if cloud_on:
+            try:
+                texte = _transcrire_cloud(cloud_client, audio)
+            except Exception:
+                # Repli local : charger le modèle s'il est dispo, sinon proposer
+                # le téléchargement de secours.
+                if local_model is None and modele_local_present():
+                    local_model = _charger_modele_local()
+                if local_model is not None:
+                    if not fallback_warned:
+                        display_queue.put(("AVIS",
+                            "Connexion indisponible — transcription locale (qualité réduite)"))
+                        fallback_warned = True
+                elif not backup_signaled:
+                    display_queue.put(("BESOIN_SECOURS",
+                        "Téléchargement du modèle de secours requis (1,6 Go). Continuer ?"))
+                    backup_signaled = True
+
+        if texte is None and local_model is not None:
+            texte = _transcrire_local(local_model, audio)
+
+        texte = corriger_transcription((texte or "").strip())
         if texte:
+            _maj_contexte(texte)   # alimente le prompt du prochain segment
             display_queue.put((label, texte))
 
 
@@ -914,13 +938,14 @@ def _ecrire_docx(chemin, infos, now, resume, entries, annexes=None):
     # 2. Tableau patient 2 colonnes.
     date_str  = now.strftime("%d/%m/%Y")
     heure_str = now.strftime("%Hh%M")
-    lignes_patient = [
-        ("Nom",       infos["nom"]),
-        ("Prénom",    infos["prenom"]),
-        ("Né(e) le",  infos["naissance"]),
-        ("Date",      "%s à %s" % (date_str, heure_str)),
-        ("Motif",     infos.get("motif") or "—"),
-    ]
+    # Seul le Nom est obligatoire ; Prénom et Né(e) le sont omis si vides.
+    lignes_patient = [("Nom", infos.get("nom") or "—")]
+    if (infos.get("prenom") or "").strip():
+        lignes_patient.append(("Prénom", infos["prenom"]))
+    if (infos.get("naissance") or "").strip():
+        lignes_patient.append(("Né(e) le", infos["naissance"]))
+    lignes_patient.append(("Date", "%s à %s" % (date_str, heure_str)))
+    lignes_patient.append(("Motif", infos.get("motif") or "—"))
     tbl = doc.add_table(rows=len(lignes_patient), cols=2)
     tbl.style = "Table Grid"
     for row_idx, (lbl, val) in enumerate(lignes_patient):
@@ -1172,8 +1197,11 @@ def _ecrire_txt_secours(chemin, infos, now, resume, entries):
     sep = "=" * 60
     with open(chemin, "w", encoding="utf-8") as f:
         f.write(sep + "\n")
-        f.write("  CONSULTATION — %s %s\n" % (infos["nom"].upper(), infos["prenom"]))
-        f.write("  Né(e) le : %s\n" % infos["naissance"])
+        entete = ("%s %s" % ((infos.get("nom") or "").upper(),
+                             infos.get("prenom") or "")).strip()
+        f.write("  CONSULTATION — %s\n" % entete)
+        if (infos.get("naissance") or "").strip():
+            f.write("  Né(e) le : %s\n" % infos["naissance"])
         f.write("  Date : %s à %s\n" % (now.strftime("%d/%m/%Y"), now.strftime("%Hh%M")))
         f.write("  Motif : %s\n" % (infos.get("motif") or "—"))
         f.write(sep + "\n\n")
@@ -1316,30 +1344,31 @@ class Overlay:
             for h, loc, t in self.entries)
 
     def _generer_resume_avec_progres(self, transcript):
-        """Genere le resume dans un THREAD (UI non gelee), avec indicateur en
-        deux temps (chargement puis redaction). Renvoie le resume ou None si
-        echec. Le modele reste en memoire pour la session."""
+        """Genere le resume via Groq (rapide), fallback Qwen local si reseau
+        indisponible. Fenetre de progression dans un thread."""
         dlg = tk.Toplevel(self.root)
         dlg.title("Résumé")
         dlg.configure(bg="#0d1117")
         dlg.attributes("-topmost", True)
         dlg.resizable(False, False)
         dlg.grab_set()
-        dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # pas de fermeture en cours
+        dlg.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        lbl = tk.Label(dlg, text="Chargement du modèle de résumé...",
+        lbl = tk.Label(dlg, text="Rédaction du résumé...",
                        bg="#0d1117", fg="#e6edf3", font=("Segoe UI", 12))
         lbl.pack(padx=36, pady=(26, 6))
-        tk.Label(dlg, text="Cela peut prendre une à deux minutes selon l'ordinateur.",
+        tk.Label(dlg, text="Génération via Groq (quelques secondes).",
                  bg="#0d1117", fg="#8b949e", font=("Segoe UI", 9)).pack(padx=36, pady=(0, 26))
 
-        etat = {"stage": "load", "resume": None, "done": False}
+        etat = {"resume": None, "done": False}
 
         def worker():
             try:
-                llm = charger_modele_resume()
-                etat["stage"] = "gen"
-                etat["resume"] = generer_resume(llm, transcript)
+                texte = groq_summarize(transcript, GROQ_API_KEY)
+                if texte is None:
+                    lbl.config(text="Résumé local (hors-ligne)...")
+                    texte = local_summarize(transcript)
+                etat["resume"] = texte
             except Exception:
                 etat["resume"] = None
             etat["done"] = True
@@ -1353,9 +1382,6 @@ class Overlay:
                 except Exception:
                     pass
                 return
-            lbl.config(text=("Chargement du modèle de résumé..."
-                             if etat["stage"] == "load"
-                             else "Rédaction du résumé en cours..."))
             dlg.after(200, tick)
 
         dlg.after(200, tick)
@@ -1743,9 +1769,96 @@ _download_state = {
                 "done": False, "error": None},
     "qwen":    {"downloaded": 0, "total": 2_050_000_000, "speed": 0.0,
                 "done": False, "error": None},
+    # Mise à jour de l'application (EchoSetup.exe téléchargé dans %TEMP%).
+    "update":  {"downloaded": 0, "total": 195_000_000, "speed": 0.0,
+                "done": False, "error": None},
     "running": False,
 }
 _download_lock = threading.Lock()
+
+# ----------------------------- MISE À JOUR AUTOMATIQUE ------------------------
+
+_update_info  = None                 # résultat caché de la vérification
+_update_lock  = threading.Lock()
+_update_file  = None                 # chemin du EchoSetup.exe téléchargé
+
+
+def _version_tuple(v):
+    """Convertit '1.2.0' → (1, 2, 0). Lève si format inattendu."""
+    return tuple(int(x) for x in str(v).strip().split("."))
+
+
+def verifier_mise_a_jour():
+    """Interroge la dernière release GitHub. Silencieux en cas d'erreur réseau.
+    Retourne {disponible: bool, version?, url?}."""
+    try:
+        import requests
+        r = requests.get(
+            "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO,
+            timeout=5,
+        )
+        data = r.json()
+        derniere = str(data["tag_name"]).lstrip("v")
+        if _version_tuple(derniere) > _version_tuple(APP_VERSION):
+            url = next(
+                a["browser_download_url"]
+                for a in data["assets"]
+                if a["name"].endswith(".exe")
+            )
+            return {"disponible": True, "version": derniere, "url": url}
+    except Exception:
+        pass
+    return {"disponible": False}
+
+
+def _warm_update_check():
+    """Pré-charge la vérification de mise à jour (thread daemon au démarrage)."""
+    global _update_info
+    info = verifier_mise_a_jour()
+    with _update_lock:
+        _update_info = info
+
+
+def _dl_update(url):
+    """Télécharge EchoSetup.exe dans %TEMP% avec progression (best-effort)."""
+    global _update_file
+    dest = os.path.join(tempfile.gettempdir(), "EchoSetup.exe")
+    with _download_lock:
+        _download_state["update"].update(
+            {"downloaded": 0, "speed": 0.0, "done": False, "error": None})
+    try:
+        import requests
+        with requests.get(url, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", 0)) or \
+                _download_state["update"]["total"]
+            with _download_lock:
+                _download_state["update"]["total"] = total
+            dl = 0
+            t0 = time.time()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(chunk_size=262144):
+                    if stop_event.is_set():
+                        break
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    dl += len(chunk)
+                    dt = time.time() - t0
+                    with _download_lock:
+                        _download_state["update"]["downloaded"] = dl
+                        _download_state["update"]["speed"] = \
+                            round(dl / dt / 1_000_000, 1) if dt > 0 else 0.0
+        _update_file = dest
+        with _download_lock:
+            _download_state["update"]["done"]       = True
+            _download_state["update"]["downloaded"] = _download_state["update"]["total"]
+            _download_state["update"]["speed"]      = 0.0
+    except Exception as exc:
+        with _download_lock:
+            _download_state["update"]["error"] = (
+                "Téléchargement de la mise à jour interrompu. "
+                "Vérifiez votre connexion. (" + str(exc)[:80] + ")")
 
 
 def _taille_dossier(chemin):
@@ -2160,6 +2273,28 @@ class Api:
         sauver_config(cfg)
         return {"ok": True}
 
+    def backup_model_status(self):
+        """État du modèle local de secours (présent + progression éventuelle)."""
+        with _download_lock:
+            import copy
+            return {"present": modele_local_present(),
+                    "whisper": copy.deepcopy(_download_state["whisper"]),
+                    "running": _download_state["running"]}
+
+    def start_backup_download(self):
+        """Télécharge le modèle Whisper de secours À LA DEMANDE (1,6 Go).
+        Retourne {ok, ready} : ready=True si déjà présent."""
+        if modele_local_present():
+            return {"ok": True, "ready": True}
+        with _download_lock:
+            if _download_state["running"]:
+                return {"ok": True, "ready": False}
+            _download_state["whisper"]["error"]      = None
+            _download_state["whisper"]["done"]       = False
+            _download_state["whisper"]["downloaded"] = 0
+        threading.Thread(target=_run_downloads, args=(["whisper"],), daemon=True).start()
+        return {"ok": True, "ready": False}
+
     def pick_folder(self):
         """Sélecteur de dossier natif (depuis n'importe quelle fenêtre)."""
         win = self._main_win or self._overlay_win or self._window
@@ -2201,6 +2336,10 @@ class Api:
         self._resume_status = "idle"
         self._resume_text   = None
         self._start_time    = datetime.datetime.now()
+        self._saved_id        = None
+        self._saved_file_path = None
+        self._saved_annexes   = []
+        self._saved_is_docx   = False
 
         result = self.start(mic_name, output_name)
         if result.get("ok"):
@@ -2250,22 +2389,24 @@ class Api:
     # ===== FLUX DE SAUVEGARDE (orchestré depuis le JS de l'overlay) ==========
 
     def generate_resume_async(self):
-        """Lance la génération du résumé dans un thread.
+        """Lance la génération du résumé (Groq, fallback Qwen) dans un thread.
         JS pollera get_resume_status() pour la progression."""
         self._resume_status = "loading"
         self._resume_text   = None
 
         def worker():
             try:
-                llm = charger_modele_resume()
                 self._resume_status = "generating"
                 with self._lock:
                     entries = list(self._entries)
                 transcript = "\n".join(
                     "[%s] %s : %s" % (h, LOCUTEUR_FICHIER.get(loc, loc), t)
                     for h, loc, t in entries)
-                self._resume_text   = generer_resume(llm, transcript)
-                self._resume_status = "done"
+                texte = groq_summarize(transcript, GROQ_API_KEY)
+                if texte is None:
+                    texte = local_summarize(transcript)
+                self._resume_text   = texte
+                self._resume_status = "done" if texte else "error"
             except Exception:
                 self._resume_status = "error"
 
@@ -2323,15 +2464,51 @@ class Api:
         sauver_config(cfg)
 
         # Ajoute au journal.
+        cid = str(uuid.uuid4())
         dur = int((datetime.datetime.now() - now).total_seconds() / 60)
         ajouter_consultation({
-            "id":           str(uuid.uuid4()),
+            "id":           cid,
             "date":         now.isoformat(),
             "patient":      self._infos,
             "summary":      resume_text or "",
             "file_path":    file_path,
             "duration_min": dur,
         })
+
+        # Mémorise pour un éventuel ajout de résumé ultérieur (flux non bloquant).
+        self._saved_id        = cid
+        self._saved_file_path = file_path
+        self._saved_annexes   = annexes or []
+        self._saved_is_docx   = file_path.lower().endswith(".docx")
+        return {"ok": True, "file_path": file_path}
+
+    def finalize_with_resume(self, resume_text):
+        """Réécrit le .docx déjà sauvegardé en y ajoutant le résumé en tête,
+        au même emplacement, et met à jour le journal. Le document existe
+        déjà : cette étape est purement optionnelle et non bloquante."""
+        fp = getattr(self, "_saved_file_path", None)
+        if not fp or not self._infos:
+            return {"ok": False, "error": "Aucun document à compléter."}
+        if not getattr(self, "_saved_is_docx", False):
+            return {"ok": False,
+                    "error": "Le document a été enregistré en texte ; "
+                             "le résumé ne peut pas y être réinséré automatiquement."}
+        now = getattr(self, "_start_time", None) or datetime.datetime.now()
+        with self._lock:
+            entries = list(self._entries)
+        annexes = getattr(self, "_saved_annexes", []) or []
+        try:
+            _ecrire_docx(fp, self._infos, now,
+                         resume_text or None, entries, annexes=annexes)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        # Met à jour le résumé dans l'historique (best-effort).
+        cid = getattr(self, "_saved_id", None)
+        if cid:
+            try:
+                maj_consultation_resume(cid, resume_text or "")
+            except Exception:
+                pass
         return {"ok": True}
 
     # ===== HISTORIQUE =========================================================
@@ -2406,7 +2583,9 @@ class Api:
         return {"whisper_ok": whisper_ok(), "qwen_ok": qwen_ok()}
 
     def start_downloads(self):
-        """Lance le(s) téléchargement(s) manquant(s) dans un thread daemon."""
+        """Télécharge les modèles demandés (Qwen en fallback optionnel).
+        Plus rien n'est forcé au premier lancement — Groq est le moteur
+        principal pour la transcription ET le résumé."""
         import logging
         try:
             logging.debug("start_downloads() appelé")
@@ -2414,29 +2593,11 @@ class Api:
                 if _download_state["running"]:
                     logging.debug("déjà en cours")
                     return {"ok": True, "msg": "already running"}
-                if not whisper_ok():
-                    _download_state["whisper"]["downloaded"] = 0
-                    _download_state["whisper"]["done"]       = False
-                    _download_state["whisper"]["error"]      = None
-                if not qwen_ok():
-                    _download_state["qwen"]["downloaded"] = 0
-                    _download_state["qwen"]["done"]       = False
-                    _download_state["qwen"]["error"]      = None
+                # Whisper et Qwen marqués terminés : rien à télécharger par défaut.
+                for k in ("whisper", "qwen"):
+                    _download_state[k]["done"] = True
 
-            to_dl = []
-            if not whisper_ok(): to_dl.append("whisper")
-            if not qwen_ok():    to_dl.append("qwen")
-
-            with _download_lock:
-                if "whisper" not in to_dl:
-                    _download_state["whisper"]["done"] = True
-                if "qwen" not in to_dl:
-                    _download_state["qwen"]["done"] = True
-
-            logging.debug("modèles à télécharger: %s", to_dl)
-            if to_dl:
-                threading.Thread(target=_run_downloads, args=(to_dl,), daemon=True).start()
-            logging.debug("start_downloads() retourne ok")
+            logging.debug("aucun modèle à télécharger (Groq cloud)")
             return {"ok": True}
         except Exception as e:
             logging.exception("start_downloads: exception")
@@ -2461,6 +2622,49 @@ class Api:
         threading.Thread(target=_run_downloads, args=([model],), daemon=True).start()
         return {"ok": True}
 
+    # ===== MISE À JOUR AUTOMATIQUE ===========================================
+
+    def get_update_info(self):
+        """Info de mise à jour (cache rempli par le thread de démarrage ;
+        calcul synchrone si pas encore prêt). Jamais bloquant pour l'UI."""
+        with _update_lock:
+            if _update_info is not None:
+                return _update_info
+        info = verifier_mise_a_jour()
+        with _update_lock:
+            globals()["_update_info"] = info
+        return info
+
+    def start_update_download(self, url):
+        """Télécharge l'installeur de mise à jour dans %TEMP% (progression via
+        get_download_progress()['update'])."""
+        if not url:
+            return {"ok": False, "error": "URL de mise à jour manquante."}
+        threading.Thread(target=_dl_update, args=(url,), daemon=True).start()
+        return {"ok": True}
+
+    def install_update(self):
+        """Lance l'installeur en silencieux puis ferme l'app pour qu'Inno Setup
+        remplace les fichiers (données %APPDATA%\\Echo préservées)."""
+        path = _update_file or os.path.join(tempfile.gettempdir(), "EchoSetup.exe")
+        if not os.path.isfile(path):
+            return {"ok": False, "error": "Fichier d'installation introuvable."}
+        try:
+            subprocess.Popen([path, "/VERYSILENT", "/NORESTART", "/CLOSEAPPLICATIONS"])
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        threading.Thread(target=self._quit_for_update, daemon=True).start()
+        return {"ok": True}
+
+    def _quit_for_update(self):
+        """Laisse le temps à l'installeur de démarrer puis ferme l'app."""
+        time.sleep(0.6)
+        try:
+            self._close_all()
+        except Exception:
+            pass
+        os._exit(0)
+
 
 # ----------------------------- MAIN (pywebview) ------------------------------
 
@@ -2470,6 +2674,9 @@ def _main_webview():
 
     api    = Api()
     ui_dir = ressource("ui")
+
+    # Vérification de mise à jour en arrière-plan (non bloquant, silencieux).
+    threading.Thread(target=_warm_update_check, daemon=True).start()
 
     # Fenêtre 1 : application principale (accueil / paramètres / historique).
     main_win = webview.create_window(

@@ -45,3 +45,6 @@ config.json
 
 # Installeur (distribué via GitHub Releases)
 dist/installer/
+
+# Clé API — ne jamais commiter
+**/GROQ_KEY*

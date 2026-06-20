@@ -61,3 +61,9 @@ typer==0.25.1
 typing_extensions==4.15.0
 webrtcvad==2.0.14
 webrtcvad-wheels==2.0.14
+
+# Mode test cloud — Groq via API compatible OpenAI (dev uniquement, non embarqué)
+# openai sert de client (base_url Groq) ; groq listé pour dispo/compat.
+openai==2.41.0
+soundfile==0.14.0
+groq==1.4.0

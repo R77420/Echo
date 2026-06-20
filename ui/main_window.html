@@ -22,7 +22,7 @@
       <span class="nav-icon">⚙</span> Paramètres
     </li>
   </ul>
-  <div class="sidebar-footer">Écho v1.0</div>
+  <div class="sidebar-footer">Écho v1.2</div>
 </nav>
 
 <!-- ── Zone de contenu ─────────────────────────────── -->
@@ -100,6 +100,19 @@
       <button class="btn-new-consult" id="btn-new-consult">
         ＋ Nouvelle consultation
       </button>
+
+      <!-- Bandeau de mise à jour (affiché si une version plus récente existe) -->
+      <div id="update-banner" class="update-banner hidden">
+        <span class="update-icon" aria-hidden="true">⬆</span>
+        <span class="update-text">
+          Mise à jour disponible — Écho v<span id="update-version"></span>
+        </span>
+        <button class="btn btn-primary btn-sm" id="update-install">Installer maintenant</button>
+        <div class="update-progress hidden" id="update-progress">
+          <div class="update-bar-track"><div class="update-bar" id="update-bar"></div></div>
+          <span class="update-status" id="update-status">Préparation…</span>
+        </div>
+      </div>
     </div>
 
     <!-- Sélecteur de périphériques (affiché inline avant de lancer) -->
@@ -329,22 +342,9 @@ onReady(async () => {
   const state = await api('get_app_state');
   if (!state) return;
 
-  // Vérifier d'abord les modèles.
-  const models = await api('check_models');
-  if (models && (!models.whisper_ok || !models.qwen_ok)) {
-    // Injecter la vue de téléchargement dynamiquement.
-    const resp = await fetch('download.html');
-    const html = await resp.text();
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    const dlView = tmp.querySelector('[data-view="download"]');
-    if (dlView) {
-      document.getElementById('content').appendChild(dlView);
-    }
-    navigate('download');
-    return;
-  }
-
+  // Plus de téléchargement forcé au premier lancement : Groq fait tout (transcription
+  // ET résumé). Le modèle Qwen local reste disponible en fallback optionnel depuis
+  // les paramètres.
   if (!state.onboarding_done) {
     navigate('onboarding-welcome');
     return;
@@ -432,15 +432,61 @@ function updateModel(isQwen, state) {
 
 let _dlPollId = null;
 
+/* Watchdog anti-blocage : un téléchargement peut rester figé (souvent à
+   0 Mo) sans jamais remonter d'erreur explicite. On compte les cycles de
+   polling où `downloaded` ne bouge pas ; au-delà de 90 s (150 × 600 ms) on
+   force l'affichage du bouton Réessayer pour ce modèle. */
+const STALL_LIMIT = 150;
+let _lastDownloaded = { whisper: -1, qwen: -1 };
+let _stallCounter   = { whisper: 0,  qwen: 0  };
+
+function resetStall(model) {
+  _stallCounter[model]   = 0;
+  _lastDownloaded[model] = -1;
+}
+
+function checkStall(model, state) {
+  const prefix = model === 'qwen' ? 'dl-q' : 'dl-w';
+
+  // Terminé ou erreur réelle : updateModel gère déjà → on remet à zéro.
+  if (state.done || state.error) { resetStall(model); return; }
+
+  if (state.downloaded === _lastDownloaded[model]) {
+    _stallCounter[model]++;
+  } else {
+    _stallCounter[model]   = 0;
+    _lastDownloaded[model] = state.downloaded;
+  }
+
+  if (_stallCounter[model] > STALL_LIMIT) {
+    // Bloqué depuis >90 s sans erreur explicite : afficher Réessayer.
+    const errDiv   = document.getElementById(prefix + '-error');
+    const retryBtn = document.getElementById(prefix + '-retry');
+    const errMsg   = document.getElementById(prefix + '-errmsg');
+    if (errMsg)   errMsg.textContent =
+      'Téléchargement bloqué. Vérifiez votre connexion, puis réessayez.';
+    if (errDiv)   errDiv.classList.remove('hidden');
+    if (retryBtn) retryBtn.style.display = 'inline-flex';
+    setStatus(prefix + '-status', 'Bloqué', 'err');
+  }
+}
+
 async function pollProgress() {
   const prog = await api('get_download_progress');
   if (!prog) { _dlPollId = setTimeout(pollProgress, 600); return; }
 
-  updateModel(false, prog.whisper);
-  updateModel(true,  prog.qwen);
+  // Groq mode : tout est marqué "done" d'emblée → finir immédiatement.
+  if (prog.qwen.done && prog.whisper.done) {
+    document.dispatchEvent(new CustomEvent('downloads-complete'));
+    return;
+  }
 
-  if (prog.whisper.done && prog.qwen.done && !prog.whisper.error && !prog.qwen.error) {
-    // Terminé — continuer après 1,5s.
+  // Fallback : progression d'un modèle en cours.
+  const model = !prog.whisper.done ? 'whisper' : 'qwen';
+  updateModel(model === 'qwen', prog[model]);
+  checkStall(model, prog[model]);
+
+  if (prog[model].done && !prog[model].error) {
     setTimeout(() => {
       document.dispatchEvent(new CustomEvent('downloads-complete'));
     }, 1500);
@@ -456,6 +502,11 @@ function setupDownloadRetries() {
     if (btn) {
       btn.addEventListener('click', async () => {
         const model = prefix === 'dl-w' ? 'whisper' : 'qwen';
+        resetStall(model);
+        // Masquer l'erreur/bouton le temps de la nouvelle tentative.
+        const errDiv = document.getElementById(prefix + '-error');
+        if (errDiv) errDiv.classList.add('hidden');
+        btn.style.display = 'none';
         const res = await api('retry_download', model);
         if (res && res.ok) _dlPollId = setTimeout(pollProgress, 600);
       });
@@ -468,6 +519,7 @@ let _dlStarted = false;
 async function initDownloads() {
   if (_dlStarted) return;
   _dlStarted = true;
+  resetStall('qwen');
   setupDownloadRetries();
   await api('start_downloads');
   _dlPollId = setTimeout(pollProgress, 600);
@@ -554,6 +606,61 @@ async function loadHome() {
       days[d.getDay()] + ' ' + d.getDate() + ' ' + month[d.getMonth()] + ' ' + d.getFullYear();
   }
   await loadConsultations();
+  checkForUpdate();
+}
+
+/* ------------------------------------------------------------------ */
+/*  Mise à jour automatique                                           */
+/* ------------------------------------------------------------------ */
+
+let _updateUrl = null;
+let _updatePollId = null;
+
+async function checkForUpdate() {
+  const info = await api('get_update_info');
+  if (info && info.disponible) {
+    _updateUrl = info.url;
+    $('update-version').textContent = info.version || '';
+    show($('update-banner'));
+  }
+}
+
+$('update-install').addEventListener('click', async () => {
+  if (!_updateUrl) return;
+  $('update-install').classList.add('hidden');
+  show($('update-progress'));
+  $('update-status').textContent = 'Téléchargement…';
+  const res = await api('start_update_download', _updateUrl);
+  if (!res || !res.ok) {
+    $('update-status').textContent = (res && res.error) || 'Échec du téléchargement.';
+    return;
+  }
+  pollUpdateDownload();
+});
+
+function pollUpdateDownload() {
+  _updatePollId = setTimeout(async () => {
+    const prog = await api('get_download_progress');
+    const u = prog && prog.update;
+    if (u) {
+      const pct = Math.min(100, Math.max(0, (u.downloaded / (u.total || 1)) * 100));
+      $('update-bar').style.width = pct.toFixed(0) + '%';
+      if (u.error) {
+        $('update-status').textContent = u.error;
+        $('update-install').classList.remove('hidden');
+        return;
+      }
+      if (u.done) {
+        $('update-bar').style.width = '100%';
+        $('update-status').textContent = 'Installation en cours… l\'application va se fermer.';
+        await api('install_update');
+        return;
+      }
+      $('update-status').textContent =
+        fmtBytes(u.downloaded) + ' / ' + fmtBytes(u.total);
+    }
+    pollUpdateDownload();
+  }, 600);
 }
 
 async function loadConsultations() {
