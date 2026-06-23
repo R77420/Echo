@@ -31,6 +31,10 @@ monitor*.py
 selftest_*.py
 test_*.py
 transcription_test*.txt
+
+# ...mais la suite de tests du projet (pytest) est versionnée.
+!tests/
+!tests/test_*.py
 resumer_bench*.py
 
 # Config et données personnelles

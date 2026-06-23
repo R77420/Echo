@@ -1,9 +1,12 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Écho</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="main-app">
@@ -11,18 +14,48 @@
 <!-- ── Sidebar ─────────────────────────────────────── -->
 <nav class="sidebar">
   <div class="sidebar-brand">
-    <div class="sidebar-logo">Écho</div>
-    <div class="sidebar-doctor" id="doctor-name">Chargement…</div>
+    <div class="sidebar-logo">
+      <svg class="brand-mark" viewBox="0 0 125 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" fill="currentColor">
+        <rect x="10"  y="47" width="9" height="26" rx="4"/>
+        <rect x="26"  y="37" width="9" height="46" rx="4"/>
+        <rect x="42"  y="27" width="9" height="66" rx="4"/>
+        <rect x="58"  y="17" width="9" height="86" rx="4"/>
+        <rect x="74"  y="27" width="9" height="66" rx="4"/>
+        <rect x="90"  y="37" width="9" height="46" rx="4"/>
+        <rect x="106" y="47" width="9" height="26" rx="4"/>
+      </svg>
+      <span>Écho</span>
+    </div>
   </div>
+
+  <!-- Profil médecin -->
+  <div class="sidebar-doc">
+    <div class="doc-avatar" id="doctor-initials">··</div>
+    <div class="doc-meta">
+      <div class="doc-name" id="doctor-name">Chargement…</div>
+      <div class="doc-role">Médecin généraliste</div>
+    </div>
+  </div>
+
+  <div class="sidebar-navlabel">Menu</div>
   <ul class="sidebar-nav">
     <li class="nav-item" data-nav="home">
-      <span class="nav-icon">⊞</span> Accueil
+      <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 10v10h14V10"/></svg>
+      <span>Accueil</span>
     </li>
     <li class="nav-item" data-nav="settings">
-      <span class="nav-icon">⚙</span> Paramètres
+      <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5a7 7 0 0 0 .1-1z"/></svg>
+      <span>Paramètres</span>
     </li>
   </ul>
-  <div class="sidebar-footer">Écho v1.2</div>
+
+  <div class="sidebar-spacer"></div>
+
+  <div class="nav-item nav-item-help" id="nav-help">
+    <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4 1.8c0 1.7-2.5 2-2.5 3.2"/><path d="M12 17h.01"/></svg>
+    <span>Aide &amp; contact</span>
+  </div>
+  <div class="sidebar-footer">Écho v1.5</div>
 </nav>
 
 <!-- ── Zone de contenu ─────────────────────────────── -->
@@ -47,6 +80,37 @@
           Continuer →
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : ONBOARDING — CHOIX DU THÈME
+       ═══════════════════════════════════════════════ -->
+  <div data-view="onboarding-theme" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="onboarding-wrap" style="max-width:640px;">
+      <div class="onboarding-title">Comment voulez-vous afficher Écho ?</div>
+      <div class="onboarding-sub">Vous pourrez changer cela à tout moment dans les Paramètres.</div>
+      <div class="theme-cards">
+        <button type="button" class="theme-card selected" data-theme-choice="light" id="theme-card-light">
+          <div class="theme-thumb tt-light">
+            <div class="tt-side"></div>
+            <div class="tt-main"><div class="tt-bar"></div><div class="tt-line"></div><div class="tt-line short"></div></div>
+          </div>
+          <div class="theme-card-label">Clair</div>
+          <div class="theme-card-sub">Recommandé</div>
+        </button>
+        <button type="button" class="theme-card" data-theme-choice="dark" id="theme-card-dark">
+          <div class="theme-thumb tt-dark">
+            <div class="tt-side"></div>
+            <div class="tt-main"><div class="tt-bar"></div><div class="tt-line"></div><div class="tt-line short"></div></div>
+          </div>
+          <div class="theme-card-label">Sombre</div>
+          <div class="theme-card-sub">&nbsp;</div>
+        </button>
+      </div>
+      <button class="btn btn-primary" id="theme-continue" style="width:100%;max-width:320px;padding:12px;margin-top:6px;">
+        Continuer →
+      </button>
     </div>
   </div>
 
@@ -89,36 +153,35 @@
   <!-- ═══════════════════════════════════════════════
        VUE : ACCUEIL
        ═══════════════════════════════════════════════ -->
-  <div data-view="home" class="hidden" style="flex:1;display:flex;flex-direction:column;">
-    <div class="page-header">
-      <div class="page-title" id="home-greeting">Bonjour</div>
-      <div class="page-subtitle" id="home-stats"></div>
-    </div>
-
-    <!-- Bouton nouvelle consultation -->
-    <div class="section" style="padding-bottom:0;">
-      <button class="btn-new-consult" id="btn-new-consult">
+  <div data-view="home" class="hidden home-view">
+    <!-- Bandeau supérieur : salutation + nouvelle consultation -->
+    <div class="home-topline">
+      <div>
+        <div class="home-greet" id="home-greeting">Bonjour</div>
+        <div class="home-date" id="home-stats"></div>
+      </div>
+      <button class="btn-new-consult btn-new-inline" id="btn-new-consult">
         ＋ Nouvelle consultation
       </button>
+    </div>
 
-      <!-- Bandeau de mise à jour (affiché si une version plus récente existe) -->
-      <div id="update-banner" class="update-banner hidden">
-        <span class="update-icon" aria-hidden="true">⬆</span>
-        <span class="update-text">
-          Mise à jour disponible — Écho v<span id="update-version"></span>
-        </span>
-        <button class="btn btn-primary btn-sm" id="update-install">Installer maintenant</button>
-        <div class="update-progress hidden" id="update-progress">
-          <div class="update-bar-track"><div class="update-bar" id="update-bar"></div></div>
-          <span class="update-status" id="update-status">Préparation…</span>
-        </div>
+    <!-- Bandeau de mise à jour (affiché si une version plus récente existe) -->
+    <div id="update-banner" class="update-banner hidden">
+      <span class="update-icon" aria-hidden="true">⬆</span>
+      <span class="update-text">
+        Mise à jour disponible — Écho v<span id="update-version"></span>
+      </span>
+      <button class="btn btn-primary btn-sm" id="update-install">Installer maintenant</button>
+      <div class="update-progress hidden" id="update-progress">
+        <div class="update-bar-track"><div class="update-bar" id="update-bar"></div></div>
+        <span class="update-status" id="update-status">Préparation…</span>
       </div>
     </div>
 
     <!-- Sélecteur de périphériques (affiché inline avant de lancer) -->
     <div id="device-picker" class="hidden" style="
-      margin:0 32px;padding:20px;
-      background:#fff;border:1px solid var(--border);
+      padding:20px;
+      background:var(--bg-card);border:1px solid var(--border);
       border-radius:var(--r-md);box-shadow:var(--shadow-card);">
       <div class="section-title" style="margin-bottom:16px;">Périphériques audio</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
@@ -138,8 +201,11 @@
       </div>
     </div>
 
+    <!-- Statistiques -->
+    <div class="stats-grid" id="stats-grid"></div>
+
     <!-- Recherche dans l'historique -->
-    <div class="section" style="padding-top:8px;padding-bottom:0;">
+    <div class="home-search">
       <div class="search-box">
         <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -154,11 +220,9 @@
       <div class="search-count hidden" id="consult-search-count"></div>
     </div>
 
-    <!-- Consultations récentes -->
-    <div class="section flex-1">
-      <div class="section-title">Consultations récentes</div>
-      <div id="consult-list" style="display:flex;flex-direction:column;gap:10px;"></div>
-    </div>
+    <!-- Consultations (timeline) -->
+    <div class="consult-timeline" id="consult-list"></div>
+  </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════
@@ -170,6 +234,19 @@
     </div>
     <div class="section flex-1" style="overflow-y:auto;">
       <div style="max-width:580px;display:flex;flex-direction:column;gap:28px;">
+
+        <div>
+          <div class="section-title">Apparence</div>
+          <div class="field">
+            <label class="field-label">Thème de l'interface</label>
+            <div class="theme-radios">
+              <button type="button" class="theme-radio" data-theme-choice="light" id="set-theme-light">☀ Clair</button>
+              <button type="button" class="theme-radio" data-theme-choice="dark" id="set-theme-dark">● Sombre</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider" style="margin:0;"></div>
 
         <div>
           <div class="section-title">Médecin</div>
@@ -219,7 +296,7 @@
           <div class="section-title">Dossier de sauvegarde</div>
           <div style="display:flex;align-items:center;gap:10px;">
             <input type="text" id="set-folder" placeholder="Non défini — les fichiers sont sauvegardés à l'endroit choisi" readonly
-                   style="flex:1;background:#FAFBFC;color:var(--txt-secondary);">
+                   style="flex:1;background:var(--bg-main);color:var(--txt-secondary);">
             <button class="btn btn-secondary" id="set-folder-btn">Modifier…</button>
           </div>
         </div>
@@ -247,7 +324,7 @@
     </div>
 
     <div class="section flex-1" style="overflow-y:auto;">
-      <div style="max-width:640px;display:flex;flex-direction:column;gap:24px;">
+      <div style="max-width:720px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:24px;">
 
         <!-- Infos patient -->
         <div>
@@ -275,9 +352,9 @@
                  style="margin-bottom:12px;">
               Ce fichier n'est plus disponible à cet emplacement.
             </div>
-            <div style="display:flex;gap:8px;" id="detail-file-btns">
-              <button class="btn btn-primary" id="detail-open-file">Ouvrir dans Word</button>
-              <button class="btn btn-secondary" id="detail-open-folder">Ouvrir le dossier</button>
+            <div style="display:flex;gap:10px;" id="detail-file-btns">
+              <button class="btn btn-primary" id="detail-open-file" style="flex:1;">Ouvrir dans Word</button>
+              <button class="btn btn-secondary" id="detail-open-folder" style="flex:1;">Ouvrir le dossier</button>
             </div>
           </div>
         </div>
@@ -327,11 +404,6 @@ function navigate(viewName) {
     el.classList.toggle('active', el.dataset.nav === viewName);
   });
   currentView = viewName;
-
-  // Démarrer les téléchargements si on arrive sur la vue download.
-  if (viewName === 'download') {
-    initDownloads();
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,9 +414,10 @@ onReady(async () => {
   const state = await api('get_app_state');
   if (!state) return;
 
-  // Plus de téléchargement forcé au premier lancement : Groq fait tout (transcription
-  // ET résumé). Le modèle Qwen local reste disponible en fallback optionnel depuis
-  // les paramètres.
+  applyTheme(state.theme);   // restaure le thème depuis config.json
+
+  // Aucun téléchargement au premier lancement : Groq assure transcription ET
+  // résumé. (Le modèle Whisper de secours hors-ligne est récupéré à la demande.)
   if (!state.onboarding_done) {
     navigate('onboarding-welcome');
     return;
@@ -355,9 +428,9 @@ onReady(async () => {
   navigate('home');
 });
 
-/* ================================================================== */
-/*  Téléchargement des modèles (vue download.html)                     */
-/* ================================================================== */
+/* ------------------------------------------------------------------ */
+/*  Format d'octets (utilisé par la barre de mise à jour)             */
+/* ------------------------------------------------------------------ */
 
 const _MB = 1024 * 1024;
 
@@ -367,176 +440,10 @@ function fmtBytes(b) {
   return Math.round(m) + ' Mo';
 }
 
-function fmtSpeed(speed) {
-  if (speed <= 0) return '—';
-  const ms = speed / _MB;
-  if (ms < 0.1) return (speed / 1024).toFixed(0) + ' Ko/s';
-  return ms.toFixed(1) + ' Mo/s';
-}
-
-function fmtETA(eta) {
-  if (!eta || eta <= 0) return '—';
-  if (eta < 60) return '~' + Math.round(eta) + ' s';
-  return '~' + Math.round(eta / 60) + ' min';
-}
-
-function setStatus(id, text, type) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = text;
-  el.style.color = type === 'ok' ? 'var(--accent)' :
-                   type === 'err' ? 'var(--danger)' :
-                   type === 'run' ? 'var(--txt-primary)' :
-                   'var(--txt-secondary)';
-}
-
-function setBar(id, pct) {
-  const bar = document.getElementById(id);
-  if (bar) bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
-}
-
-function updateModel(isQwen, state) {
-  const prefix = isQwen ? 'dl-q' : 'dl-w';
-  const total  = isQwen ? 2_050_000_000 : 1_700_000_000;
-
-  setStatus(prefix + '-status', state.done ? '✓ Terminé' :
-            state.error ? 'Échec' : 'Téléchargement…',
-            state.done ? 'ok' : (state.error ? 'err' : 'run'));
-  setBar(prefix + '-bar', (state.downloaded / total) * 100);
-
-  const bytesEl = document.getElementById(prefix + '-bytes');
-  if (bytesEl) bytesEl.textContent = fmtBytes(state.downloaded) + ' / ' + fmtBytes(total);
-
-  const speedEl = document.getElementById(prefix + '-speed');
-  const etaEl   = document.getElementById(prefix + '-eta');
-  if (speedEl && etaEl) {
-    speedEl.textContent = state.done ? '✓' : fmtSpeed(state.speed);
-    etaEl.textContent   = state.done ? '—' : fmtETA(state.eta);
-  }
-
-  // Erreur
-  const errDiv = document.getElementById(prefix + '-error');
-  const retryBtn = document.getElementById(prefix + '-retry');
-  if (errDiv && retryBtn) {
-    if (state.error) {
-      const errMsg = document.getElementById(prefix + '-errmsg');
-      if (errMsg) errMsg.textContent = state.error;
-      errDiv.classList.remove('hidden');
-      retryBtn.style.display = 'inline-flex';
-    } else {
-      errDiv.classList.add('hidden');
-      retryBtn.style.display = 'none';
-    }
-  }
-}
-
-let _dlPollId = null;
-
-/* Watchdog anti-blocage : un téléchargement peut rester figé (souvent à
-   0 Mo) sans jamais remonter d'erreur explicite. On compte les cycles de
-   polling où `downloaded` ne bouge pas ; au-delà de 90 s (150 × 600 ms) on
-   force l'affichage du bouton Réessayer pour ce modèle. */
-const STALL_LIMIT = 150;
-let _lastDownloaded = { whisper: -1, qwen: -1 };
-let _stallCounter   = { whisper: 0,  qwen: 0  };
-
-function resetStall(model) {
-  _stallCounter[model]   = 0;
-  _lastDownloaded[model] = -1;
-}
-
-function checkStall(model, state) {
-  const prefix = model === 'qwen' ? 'dl-q' : 'dl-w';
-
-  // Terminé ou erreur réelle : updateModel gère déjà → on remet à zéro.
-  if (state.done || state.error) { resetStall(model); return; }
-
-  if (state.downloaded === _lastDownloaded[model]) {
-    _stallCounter[model]++;
-  } else {
-    _stallCounter[model]   = 0;
-    _lastDownloaded[model] = state.downloaded;
-  }
-
-  if (_stallCounter[model] > STALL_LIMIT) {
-    // Bloqué depuis >90 s sans erreur explicite : afficher Réessayer.
-    const errDiv   = document.getElementById(prefix + '-error');
-    const retryBtn = document.getElementById(prefix + '-retry');
-    const errMsg   = document.getElementById(prefix + '-errmsg');
-    if (errMsg)   errMsg.textContent =
-      'Téléchargement bloqué. Vérifiez votre connexion, puis réessayez.';
-    if (errDiv)   errDiv.classList.remove('hidden');
-    if (retryBtn) retryBtn.style.display = 'inline-flex';
-    setStatus(prefix + '-status', 'Bloqué', 'err');
-  }
-}
-
-async function pollProgress() {
-  const prog = await api('get_download_progress');
-  if (!prog) { _dlPollId = setTimeout(pollProgress, 600); return; }
-
-  // Groq mode : tout est marqué "done" d'emblée → finir immédiatement.
-  if (prog.qwen.done && prog.whisper.done) {
-    document.dispatchEvent(new CustomEvent('downloads-complete'));
-    return;
-  }
-
-  // Fallback : progression d'un modèle en cours.
-  const model = !prog.whisper.done ? 'whisper' : 'qwen';
-  updateModel(model === 'qwen', prog[model]);
-  checkStall(model, prog[model]);
-
-  if (prog[model].done && !prog[model].error) {
-    setTimeout(() => {
-      document.dispatchEvent(new CustomEvent('downloads-complete'));
-    }, 1500);
-    return;
-  }
-
-  _dlPollId = setTimeout(pollProgress, 600);
-}
-
-function setupDownloadRetries() {
-  ['dl-w', 'dl-q'].forEach(prefix => {
-    const btn = document.getElementById(prefix + '-retry');
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        const model = prefix === 'dl-w' ? 'whisper' : 'qwen';
-        resetStall(model);
-        // Masquer l'erreur/bouton le temps de la nouvelle tentative.
-        const errDiv = document.getElementById(prefix + '-error');
-        if (errDiv) errDiv.classList.add('hidden');
-        btn.style.display = 'none';
-        const res = await api('retry_download', model);
-        if (res && res.ok) _dlPollId = setTimeout(pollProgress, 600);
-      });
-    }
-  });
-}
-
-let _dlStarted = false;
-
-async function initDownloads() {
-  if (_dlStarted) return;
-  _dlStarted = true;
-  resetStall('qwen');
-  setupDownloadRetries();
-  await api('start_downloads');
-  _dlPollId = setTimeout(pollProgress, 600);
-}
-
-/* Quand les téléchargements sont finis, rafraîchir. */
-document.addEventListener('downloads-complete', async () => {
-  const state = await api('get_app_state');
-  if (!state) return;
-  if (!state.onboarding_done) {
-    navigate('onboarding-welcome');
-  } else {
-    $('doctor-name').textContent = state.doctor_name || '';
-    await loadHome();
-    navigate('home');
-  }
-});
+/* (La vue de téléchargement de modèles d'onboarding a été retirée : Groq est le
+   moteur cloud pour la transcription ET le résumé, plus aucun modèle n'est
+   téléchargé au premier lancement. Le modèle Whisper de secours hors-ligne est
+   récupéré à la demande depuis l'overlay.) */
 
 /* ------------------------------------------------------------------ */
 /*  Onboarding                                                         */
@@ -546,7 +453,36 @@ $('ob-next').addEventListener('click', () => {
   const name = $('ob-name').value.trim();
   if (!name) { show($('ob-name-err')); $('ob-name').focus(); return; }
   hide($('ob-name-err'));
-  // Pré-remplir la page de config avec les périphériques.
+  navigate('onboarding-theme');     // étape choix du thème avant les périphériques
+});
+
+/* ------------------------------------------------------------------ */
+/*  Thème (clair / sombre)                                            */
+/* ------------------------------------------------------------------ */
+
+function applyTheme(theme) {
+  const t = (theme === 'dark') ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  // Accorde la barre de titre Windows au thème (best-effort).
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.apply_theme) {
+    api('apply_theme', t);
+  }
+  return t;
+}
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') || 'light';
+}
+
+// Onboarding : cartes Clair / Sombre (aperçu live au clic).
+document.querySelectorAll('.theme-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.theme-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    applyTheme(card.dataset.themeChoice);
+  });
+});
+$('theme-continue').addEventListener('click', async () => {
+  await api('save_settings', { theme: currentTheme() });
   populateDeviceSetupPage();
   navigate('onboarding-setup');
 });
@@ -601,12 +537,49 @@ async function loadHome() {
     const d = new Date();
     const days  = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
     const month = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
-    $('home-greeting').textContent = 'Bonjour, ' + (state.doctor_name || 'Docteur');
+    const nom = state.doctor_name || 'Docteur';
+    $('home-greeting').textContent = 'Bonjour, ' + nom;
     $('home-stats').textContent =
       days[d.getDay()] + ' ' + d.getDate() + ' ' + month[d.getMonth()] + ' ' + d.getFullYear();
+    setDoctorIdentity(nom);
   }
+  await loadStats();
   await loadConsultations();
   checkForUpdate();
+}
+
+/* Avatar médecin : initiales dérivées du nom (ex. "Dr Besma" → "DB"). */
+function setDoctorIdentity(nom) {
+  $('doctor-name').textContent = nom;
+  const mots = nom.trim().split(/\s+/).filter(Boolean);  // « Dr Besma » → « DB »
+  let ini;
+  if (mots.length >= 2) ini = (mots[0][0] + mots[1][0]);
+  else if (mots.length === 1) ini = mots[0].slice(0, 2);
+  else ini = '··';
+  $('doctor-initials').textContent = ini.toUpperCase();
+}
+
+/* Cartes statistiques (calculées côté Python depuis consultations.json). */
+async function loadStats() {
+  const s = await api('get_stats') || {mois:0, semaine:0, patients:0, duree_moy:0};
+  const ICN = {
+    cal:  '<path d="M3 4h18v17H3z"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+    week: '<path d="M4 7h16M4 12h16M4 17h10"/>',
+    people:'<circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.5a3 3 0 0 1 0 5.5M21 20a6 6 0 0 0-4-5.6"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+  };
+  const cards = [
+    {ic: ICN.cal,    num: s.mois,     lab: 'consultations ce mois'},
+    {ic: ICN.week,   num: s.semaine,  lab: 'cette semaine'},
+    {ic: ICN.people, num: s.patients, lab: 'patients suivis'},
+    {ic: ICN.clock,  num: s.duree_moy, unit: ' min', lab: 'durée moyenne'},
+  ];
+  $('stats-grid').innerHTML = cards.map(c =>
+    '<div class="stat">' +
+      '<div class="stat-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + c.ic + '</svg></div>' +
+      '<div class="stat-num">' + c.num + (c.unit ? '<span class="stat-unit">' + c.unit + '</span>' : '') + '</div>' +
+      '<div class="stat-lab">' + c.lab + '</div>' +
+    '</div>').join('');
 }
 
 /* ------------------------------------------------------------------ */
@@ -665,55 +638,109 @@ function pollUpdateDownload() {
 
 async function loadConsultations() {
   allConsultations = (await api('get_consultations')) || [];
-  renderConsultationList();
+  renderFiltered();
 }
 
-function renderConsultationList() {
+/* ---- Helpers timeline ---- */
+const _MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+function _dayKey(iso) { const d = new Date(iso); return d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate(); }
+function dayLabel(iso) {
+  const d = new Date(iso), now = new Date();
+  const hier = new Date(now); hier.setDate(now.getDate() - 1);
+  if (_dayKey(iso) === _dayKey(now))  return "Aujourd'hui";
+  if (_dayKey(iso) === _dayKey(hier)) return 'Hier';
+  return d.getDate() + ' ' + _MOIS[d.getMonth()] + ' ' + d.getFullYear();
+}
+function timeHM(iso) { const d = new Date(iso); const p = n => String(n).padStart(2,'0'); return p(d.getHours())+':'+p(d.getMinutes()); }
+function initiales(p) {
+  const nom = (p.nom||'').trim(), pre = (p.prenom||'').trim();
+  if (nom && pre) return (nom[0] + pre[0]).toUpperCase();
+  if (nom) return nom.slice(0,2).toUpperCase();
+  return '··';
+}
+function avatarVariant(name) {           // hash du nom → 'a' (bleu) ou 'b' (vert)
+  let h = 0; for (const ch of (name||'')) h = (h*31 + ch.charCodeAt(0)) >>> 0;
+  return (h % 2) ? 'a' : 'b';
+}
+const _DELETE_SVG =
+  '<button class="consult-del" title="Supprimer" aria-label="Supprimer">' +
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>' +
+    '<path d="M10 11v6M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></button>';
+
+/* Rend une liste de consultations en timeline groupée par jour. */
+function renderConsultations(items) {
   const list = $('consult-list');
   list.innerHTML = '';
-  if (allConsultations.length === 0) {
-    list.innerHTML = '<div class="empty-state">' +
-      '<div class="empty-state-icon">∅</div>' +
-      '<div>Aucune consultation enregistrée pour le moment.</div></div>';
-    return;
-  }
-  allConsultations.slice(0, 20).forEach(c => {
-    const p     = c.patient || {};
-    const nom   = ((p.nom || '') + ' ' + (p.prenom || '')).trim() || '—';
+  let lastDay = null;
+  items.slice(0, 60).forEach(c => {
+    const p = c.patient || {};
+    const dl = dayLabel(c.date);
+    if (dl !== lastDay) {
+      lastDay = dl;
+      const h = document.createElement('div');
+      h.className = 'tl-daylabel';
+      h.innerHTML = '<span>' + esc(dl) + '</span><span class="tl-rule"></span>';
+      list.appendChild(h);
+    }
+    const nom   = ((p.nom||'') + ' ' + (p.prenom||'')).trim() || '—';
     const motif = p.motif || '—';
-    const ddn   = p.naissance ? 'Né(e) le ' + p.naissance : '';
-    const dur   = c.duration_min ? ' · ' + c.duration_min + ' min' : '';
     const card  = document.createElement('div');
-    card.className = 'card consultation-card';
+    card.className = 'consult';
     card.dataset.id = c.id;
     card.innerHTML =
-      '<button class="card-delete" title="Supprimer" aria-label="Supprimer">' +
-        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-        '<polyline points="3 6 5 6 21 6"></polyline>' +
-        '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>' +
-        '<path d="M10 11v6M14 11v6"></path>' +
-        '<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>' +
-        '</svg>' +
-      '</button>' +
-      '<div class="card-row1">' +
-        '<span class="card-patient">' + esc(nom) + '</span>' +
-        '<span class="card-date">' + esc(formatDate(c.date)) + esc(dur) + '</span>' +
-      '</div>' +
-      '<div class="card-detail">' + esc(ddn) + (ddn ? ' · ' : '') + 'Motif : ' + esc(motif) + '</div>' +
-      '<a class="card-link" href="#">Voir le détail →</a>';
-    card.querySelector('.card-link').addEventListener('click', e => {
-      e.preventDefault();
+      '<div class="time-rail"><span class="hm">' + esc(timeHM(c.date)) + '</span>' +
+        '<span class="dur">' + (c.duration_min ? esc(c.duration_min + ' min') : '') + '</span></div>' +
+      '<div class="av av-' + avatarVariant(nom) + '">' + esc(initiales(p)) + '</div>' +
+      '<div class="consult-body"><div class="pname">' + esc(nom) + '</div>' +
+        '<div class="reason">' + esc(motif) + '</div></div>' +
+      '<span class="consult-go">Ouvrir →</span>' + _DELETE_SVG;
+    card.addEventListener('click', e => {
+      if (e.target.closest('.consult-del')) return;
       showDetail(c);
     });
-    card.querySelector('.card-delete').addEventListener('click', e => {
-      e.preventDefault();
+    card.querySelector('.consult-del').addEventListener('click', e => {
       e.stopPropagation();
       openDeleteModal(c);
     });
     list.appendChild(card);
   });
-  applyConsultSearch();
+}
+
+/* Filtre + rendu (recherche temps réel). */
+function renderFiltered() {
+  const input    = $('consult-search');
+  const clearBtn = $('consult-search-clear');
+  const countEl  = $('consult-search-count');
+  const list     = $('consult-list');
+  const raw = input.value.trim();
+  const q   = normalise(raw);
+  clearBtn.classList.toggle('hidden', input.value.length === 0);
+
+  if (allConsultations.length === 0) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">∅</div>' +
+      '<div>Aucune consultation enregistrée pour le moment.</div></div>';
+    countEl.classList.add('hidden');
+    return;
+  }
+
+  if (!q) {
+    renderConsultations(allConsultations);
+    countEl.classList.add('hidden');
+    return;
+  }
+
+  const matches = allConsultations.filter(c => consultSearchText(c).includes(q));
+  const s = matches.length > 1 ? 's' : '';
+  countEl.textContent = matches.length + ' consultation' + s + ' trouvée' + s;
+  countEl.classList.remove('hidden');
+
+  if (matches.length === 0) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">∅</div>' +
+      '<div>Aucune consultation trouvée pour « ' + esc(raw) + ' »</div></div>';
+  } else {
+    renderConsultations(matches);
+  }
 }
 
 /* ---- Recherche dans l'historique ---- */
@@ -737,56 +764,11 @@ function consultSearchText(c) {
     .filter(Boolean).join(' '));
 }
 
-function applyConsultSearch() {
-  const input    = $('consult-search');
-  const clearBtn = $('consult-search-clear');
-  const countEl  = $('consult-search-count');
-  const list     = $('consult-list');
-  if (!input) return;
-
-  const raw = input.value.trim();
-  const q   = normalise(raw);
-  clearBtn.classList.toggle('hidden', input.value.length === 0);
-
-  // Nettoyer un éventuel message "aucun résultat" précédent.
-  const prevEmpty = list.querySelector('.search-empty');
-  if (prevEmpty) prevEmpty.remove();
-
-  const cards = list.querySelectorAll('.consultation-card');
-
-  // Champ vide → liste complète, compteur masqué.
-  if (!q) {
-    cards.forEach(card => { card.style.display = ''; });
-    countEl.classList.add('hidden');
-    return;
-  }
-
-  let matches = 0;
-  cards.forEach(card => {
-    const c  = allConsultations.find(x => String(x.id) === card.dataset.id);
-    const ok = c ? consultSearchText(c).includes(q) : false;
-    card.style.display = ok ? '' : 'none';
-    if (ok) matches++;
-  });
-
-  const s = matches > 1 ? 's' : '';
-  countEl.textContent = matches + ' consultation' + s + ' trouvée' + s;
-  countEl.classList.remove('hidden');
-
-  if (matches === 0) {
-    const div = document.createElement('div');
-    div.className = 'empty-state search-empty';
-    div.innerHTML = '<div class="empty-state-icon">∅</div>' +
-      '<div>Aucune consultation trouvée pour « ' + esc(raw) + ' »</div>';
-    list.appendChild(div);
-  }
-}
-
-$('consult-search').addEventListener('input', applyConsultSearch);
+$('consult-search').addEventListener('input', renderFiltered);
 $('consult-search-clear').addEventListener('click', () => {
   const input = $('consult-search');
   input.value = '';
-  applyConsultSearch();
+  renderFiltered();
   input.focus();
 });
 
@@ -901,6 +883,8 @@ async function loadSettings() {
   if (!s) return;
   $('set-doctor').value = s.doctor_name  || '';
   $('set-folder').value = s.save_folder  || '';
+  applyTheme(s.theme);
+  markThemeRadio(currentTheme());
   populateSelect($('set-output'), s.outputs, s.selected_output);
   populateSelect($('set-mic'),    s.mics,    s.selected_mic);
   const gp = Math.round((s.gain_patient || 1.0) * 100);
@@ -909,6 +893,18 @@ async function loadSettings() {
   $('set-gain-mic').value     = gm; $('lbl-gain-mic').textContent     = gm + '%';
   hide($('set-banner'));
 }
+
+// Boutons radio thème (paramètres) : aperçu immédiat, persistance à l'enregistrement.
+function markThemeRadio(theme) {
+  $('set-theme-light').classList.toggle('selected', theme !== 'dark');
+  $('set-theme-dark').classList.toggle('selected',  theme === 'dark');
+}
+['set-theme-light', 'set-theme-dark'].forEach(id => {
+  $(id).addEventListener('click', function() {
+    const t = applyTheme(this.dataset.themeChoice);   // s'applique sans recharger
+    markThemeRadio(t);
+  });
+});
 
 $('set-gain-patient').addEventListener('input', function() {
   $('lbl-gain-patient').textContent = this.value + '%';
@@ -933,6 +929,7 @@ $('btn-save-settings').addEventListener('click', async () => {
     gain_mic:     parseInt($('set-gain-mic').value)     / 100,
     sortie:       $('set-output').value,
     micro:        $('set-mic').value,
+    theme:        currentTheme(),
   };
   const res = await api('save_settings', data);
   const b = $('set-banner');
@@ -978,8 +975,9 @@ async function showDetail(c) {
     hide($('detail-summary-wrap'));
   }
 
-  // Fichier
-  $('detail-file-path').textContent = c.file_path || '(chemin non disponible)';
+  // Fichier — afficher uniquement le nom (basename), pas le chemin complet.
+  $('detail-file-path').textContent =
+    c.file_path ? c.file_path.split(/[\\/]/).pop() : '(fichier non disponible)';
   const fres = c.file_path ? await api('file_exists', c.file_path) : {exists:false};
   if (fres && fres.exists) {
     hide($('detail-file-warn'));

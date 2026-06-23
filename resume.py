@@ -1,30 +1,19 @@
 """Résumé structuré de consultation médicale.
 
-Deux moteurs :
-  1. Groq LLM (primaire) — résumé en ~3 s, modèle Llama 70B
-  2. Qwen local (fallback) — si pas de clé Groq ou réseau indisponible
+Moteur unique : Groq LLM (Llama 70B) — résumé en ~3 s. Si Groq est
+indisponible (réseau, quota…), aucun résumé n'est généré : le compte-rendu
+reste sauvegardé avec la transcription complète (pas de blocage).
 
 Le résumé suit un format figé : Motif / Observations / Traitements / Suivi.
 """
 
 import logging
-import multiprocessing
-import os
 import re
-import threading
-import sys
 
-# ---- Modèle Groq (primaire) ------------------------------------------------
+# ---- Modèle Groq ------------------------------------------------------------
 GROQ_MODEL = "llama-3.3-70b-versatile"
 GROQ_TEMPERATURE = 0.1
 GROQ_MAX_TOKENS  = 450
-
-# ---- Modèle local Qwen (fallback) ------------------------------------------
-RESUME_GGUF        = "Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-RESUME_SEED        = 42
-RESUME_TEMPERATURE = 0.1
-RESUME_TOP_P       = 0.9
-RESUME_MAX_TOKENS  = 450
 
 # ---- Constantes partagées --------------------------------------------------
 
@@ -127,40 +116,6 @@ RESUME_ONESHOT2_ASSISTANT = (
     "Non précisé"
 )
 
-# ---- État du moteur local --------------------------------------------------
-_resume_llm = None
-_resume_lock = threading.Lock()
-
-
-def _models_dir():
-    """Dossier des modèles téléchargés : %APPDATA%/Echo/models/"""
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    return os.path.join(base, "Echo", "models")
-
-
-def qwen_present():
-    """Vrai si le .gguf est disponible localement."""
-    f = os.path.join(_models_dir(), RESUME_GGUF)
-    try:
-        return os.path.isfile(f) and os.path.getsize(f) > 1_500_000_000
-    except OSError:
-        return False
-
-
-def _charger_qwen():
-    """Charge Qwen une fois et le garde en mémoire. Thread-safe."""
-    global _resume_llm
-    with _resume_lock:
-        if _resume_llm is None:
-            from llama_cpp import Llama
-            chemin = os.path.join(_models_dir(), RESUME_GGUF)
-            _resume_llm = Llama(
-                model_path=chemin, n_ctx=8192,
-                n_threads=multiprocessing.cpu_count(),
-                seed=RESUME_SEED, verbose=False)
-        return _resume_llm
-
-
 # ---- Normalisation ---------------------------------------------------------
 
 def _normaliser_resume(corps):
@@ -210,25 +165,4 @@ def groq_summarize(transcript, api_key):
         return ENTETE_RESUME + "\n\n" + corps
     except Exception as exc:
         logging.warning("groq_summarize: %s", exc)
-        return None
-
-
-# ---- Moteur local Qwen (fallback) ------------------------------------------
-
-def local_summarize(transcript):
-    """Résumé via Qwen local. Renvoie le texte formaté ou None si échec."""
-    try:
-        llm = _charger_qwen()
-        out = llm.create_chat_completion(
-            messages=_messages(transcript),
-            temperature=RESUME_TEMPERATURE,
-            top_p=RESUME_TOP_P,
-            max_tokens=RESUME_MAX_TOKENS,
-            seed=RESUME_SEED,
-        )
-        corps = _normaliser_resume(
-            out["choices"][0]["message"]["content"].strip())
-        return ENTETE_RESUME + "\n\n" + corps
-    except Exception as exc:
-        logging.warning("local_summarize: %s", exc)
         return None

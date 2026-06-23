@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Écho</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@500&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="overlay-app">
@@ -13,6 +16,7 @@
      ════════════════════════════════════════════════════════════ -->
 <div id="view-selector" class="hidden" style="flex:1;display:flex;flex-direction:column;">
   <div class="o-bar">
+    <img class="o-brand-mark" src="assets/echo-mark.svg" alt="">
     <span class="o-app-title">Écho</span>
   </div>
   <div class="sel-wrap">
@@ -44,43 +48,61 @@
 <!-- ════════════════════════════════════════════════════════════
      VUE PRINCIPALE — Overlay de transcription
      ════════════════════════════════════════════════════════════ -->
-<div id="view-main" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+<div id="view-main" class="hidden ov-main">
 
   <!-- En-tête -->
-  <div class="o-bar" id="main-bar">
-    <div class="rec-dot" id="rec-dot"></div>
-    <span class="o-app-title">Écho</span>
+  <header class="ov-header">
+    <svg class="o-brand-mark echo-animated" viewBox="0 0 125 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect class="echo-bar" x="10"  y="47" width="9" height="26" rx="4" fill="#34D899"/>
+      <rect class="echo-bar" x="26"  y="37" width="9" height="46" rx="4" fill="#34D899"/>
+      <rect class="echo-bar" x="42"  y="27" width="9" height="66" rx="4" fill="#34D899"/>
+      <rect class="echo-bar" x="58"  y="17" width="9" height="86" rx="4" fill="#FFFFFF"/>
+      <rect class="echo-bar" x="74"  y="27" width="9" height="66" rx="4" fill="#5BB0FF"/>
+      <rect class="echo-bar" x="90"  y="37" width="9" height="46" rx="4" fill="#5BB0FF"/>
+      <rect class="echo-bar" x="106" y="47" width="9" height="26" rx="4" fill="#5BB0FF"/>
+    </svg>
+    <span class="ov-title">Écho</span>
     <span class="flex-1"></span>
-    <span class="o-status-text" id="status-text"></span>
-    <button class="o-btn o-btn-icon" id="btn-settings" title="Réglages en cours" style="padding:6px 8px;">⚙</button>
-  </div>
+    <div class="rec-badge">
+      <span class="rec-dot2"></span>
+      <span class="rec-label">Enr.</span>
+      <span class="rec-time" id="rec-time">00:00</span>
+    </div>
+    <button class="ov-iconbtn" id="btn-settings" title="Réglages en cours" aria-label="Réglages">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5a7 7 0 0 0 .1-1z"/></svg>
+    </button>
+  </header>
 
   <!-- Bannière aucun micro -->
   <div id="no-mic-banner" class="hidden o-banner o-banner-warn"
        style="border-radius:0;border-left:none;border-right:none;border-top:none;"></div>
 
-  <!-- Transcript -->
-  <div id="transcript"></div>
-
-  <!-- Barre basse -->
-  <div class="o-bar o-bar-bottom" style="justify-content:space-between;gap:8px;">
-    <div class="vu-chips" id="vu-chips">
-      <div class="vu-chip vu-chip-m" id="chip-medecin">
-        <span class="vu-icon" aria-hidden="true">🎙</span>
-        <span class="vu-label">Médecin</span>
-        <span class="vu-wave">
-          <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
-        </span>
+  <!-- Zone de transcription -->
+  <div id="transcript" class="ov-transcript">
+    <div class="ov-waiting" id="ov-waiting">
+      <div class="wait-ic">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </div>
-      <div class="vu-chip vu-chip-p" id="chip-patient">
-        <span class="vu-icon" aria-hidden="true">🎧</span>
-        <span class="vu-label">Patient</span>
-        <span class="vu-wave">
-          <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
-        </span>
-      </div>
+      <div class="wait-title">Prêt à enregistrer</div>
+      <div class="wait-sub">La transcription démarrera dès qu'un intervenant prend la parole. Tout est traité en direct.</div>
+      <div class="wait-hint">Appuyez sur Médecin ou Patient pour lancer la consultation</div>
     </div>
-    <button id="btn-quit" class="o-btn o-btn-danger">Quitter</button>
+  </div>
+
+  <!-- Barre de contrôle -->
+  <div class="ov-controls">
+    <div class="spk-btn spk-med" id="spk-medecin">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <span>Médecin</span>
+    </div>
+    <div class="spk-btn spk-pat" id="spk-patient">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="2.5" y="13" width="4" height="7" rx="2"/><rect x="17.5" y="13" width="4" height="7" rx="2"/></svg>
+      <span>Patient</span>
+    </div>
+    <button id="btn-quit" class="end-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-11"/></svg>
+      <span>Terminer la consultation</span>
+    </button>
   </div>
 </div>
 
@@ -128,7 +150,7 @@
     </p>
   </div>
   <div class="modal-footer">
-    <button class="o-btn" id="conf-save">Enregistrer</button>
+    <button class="o-btn o-btn-primary" id="conf-save">Enregistrer</button>
     <button class="o-btn o-btn-danger" id="conf-discard">Quitter sans enregistrer</button>
   </div>
 </div>
@@ -299,26 +321,101 @@ let isActive = false;  // vrai dès que start() a réussi
 /*  Helpers transcript                                                 */
 /* ------------------------------------------------------------------ */
 
+/* --- Rendu en tours de parole (format dialogue) --- */
+let _lastTurn      = null;   // {el, speaker, sec}
+let _waitingHidden = false;
+
+function hideWaiting() {
+  if (_waitingHidden) return;
+  _waitingHidden = true;
+  const w = $('ov-waiting');
+  if (w) w.style.display = 'none';
+}
+function hmFromTs(ts) { return (ts || '').slice(0, 5); }        // "HH:MM:SS" → "HH:MM"
+function secFromTs(ts) {
+  const m = /(\d{1,2}):(\d{2}):(\d{2})/.exec(ts || '');
+  return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : 0;
+}
+
 function appendEntry(item) {
   const type = item.type || 'INFO';
-  const div  = document.createElement('div');
   if (type === 'Medecin' || type === 'Patient') {
-    div.className = 'entry';
-    div.innerHTML =
-      '<span class="chip ' + (type==='Medecin'?'chip-m':'chip-p') + '">' +
-        (type==='Medecin'?'Médecin':'Patient') +
-      '</span><div class="entry-body">' +
-        '<span class="txt">' + esc(item.texte) + '</span>' +
-        '<time>' + esc(item.timestamp) + '</time>' +
-      '</div>';
-  } else {
-    const cls = type==='AVIS' ? 'entry-avis' : type==='ERREUR' ? 'entry-err' : 'entry-sys';
-    div.className = 'entry ' + cls;
-    div.innerHTML = '<div class="entry-body"><span class="txt">' + esc(item.texte) + '</span></div>';
+    addTurn(type, item.texte, item.timestamp);
+  } else if (type === 'AVIS' || type === 'ERREUR') {
+    addSystem(item.texte, type === 'ERREUR');
   }
+  // INFO (« Transcription prête… ») : ignoré, l'état d'attente le couvre.
+}
+
+function addTurn(speaker, texte, ts) {
+  hideWaiting();
   const t = $('transcript');
+  const sec = secFromTs(ts);
+  if (_lastTurn && _lastTurn.speaker === speaker && (sec - _lastTurn.sec) < 30) {
+    // Même locuteur, < 30 s → on prolonge le tour existant.
+    const txtEl = _lastTurn.el.querySelector('.txt');
+    txtEl.textContent = (txtEl.textContent + ' ' + texte).trim();
+    _lastTurn.sec = sec;
+  } else {
+    const div = document.createElement('div');
+    div.className = 'turn ' + (speaker === 'Medecin' ? 'med' : 'pat');
+    div.innerHTML =
+      '<div class="who"><span class="tag">' + (speaker === 'Medecin' ? 'Médecin' : 'Patient') +
+        '</span><span class="ts">' + esc(hmFromTs(ts)) + '</span></div>' +
+      '<div class="txt"></div>';
+    div.querySelector('.txt').textContent = texte;
+    t.appendChild(div);
+    _lastTurn = { el: div, speaker: speaker, sec: sec };
+  }
+  // Seul le dernier tour porte le curseur clignotant « live ».
+  t.querySelectorAll('.turn.live').forEach(el => el.classList.remove('live'));
+  _lastTurn.el.classList.add('live');
+  t.scrollTop = t.scrollHeight;
+}
+
+function addSystem(texte, isErr) {
+  hideWaiting();
+  const t = $('transcript');
+  t.querySelectorAll('.turn.live').forEach(el => el.classList.remove('live'));
+  const div = document.createElement('div');
+  div.className = 'ov-sys' + (isErr ? ' err' : '');
+  div.textContent = texte;
   t.appendChild(div);
   t.scrollTop = t.scrollHeight;
+}
+
+/* Vide la transcription et réaffiche l'état d'attente (nouvelle consultation). */
+function resetTranscript() {
+  const t = $('transcript');
+  t.querySelectorAll('.turn, .ov-sys').forEach(e => e.remove());
+  _lastTurn = null; _waitingHidden = false;
+  const w = $('ov-waiting'); if (w) w.style.display = '';
+}
+
+/* --- Chronomètre d'enregistrement (MM:SS) --- */
+let _chronoTimer = null, _chronoStart = 0;
+function startChrono() {
+  stopChrono();
+  _chronoStart = Date.now();
+  $('rec-time').textContent = '00:00';
+  _chronoTimer = setInterval(() => {
+    const s  = Math.floor((Date.now() - _chronoStart) / 1000);
+    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    $('rec-time').textContent = mm + ':' + ss;
+  }, 1000);
+}
+function stopChrono() { if (_chronoTimer) { clearInterval(_chronoTimer); _chronoTimer = null; } }
+
+/* Initialise l'UI pour une nouvelle consultation (appelé par Python via
+   evaluate_js dès begin_consultation, et au 1er chargement). Idempotent. */
+function startConsultationUI() {
+  _backupShown = false;
+  resetTranscript();
+  stopPolling();
+  startPolling(items => items.forEach(handleUpdate), 200);
+  startSpeakingPolling();
+  startChrono();
 }
 
 /* ------------------------------------------------------------------ */
@@ -331,10 +428,8 @@ onReady(async () => {
   const state = await api('get_app_state');
   // L'overlay est lancé APRÈS begin_consultation(), donc on passe direct.
   show($('view-main'));
-  // Démarrer le polling dès l'ouverture.
   isActive = true;
-  startPolling(items => items.forEach(handleUpdate), 200);
-  startSpeakingPolling();
+  startConsultationUI();          // reset + chrono + polling (idempotent)
   // Charger les péri pour le panneau settings.
   loadSettingsPanel();
 });
@@ -410,20 +505,16 @@ let _vuTimer = null;
 
 function startSpeakingPolling() {
   stopSpeakingPolling();
-  const chips   = $('vu-chips');
-  const chipM   = $('chip-medecin');
-  const chipP   = $('chip-patient');
+  const bM = $('spk-medecin');
+  const bP = $('spk-patient');
   (async function loop() {
     const s = await api('get_speaking_status');
     if (s && s.active) {
-      chips.classList.remove('stopped');
-      chipM.classList.toggle('speaking', !!s.medecin);
-      chipP.classList.toggle('speaking', !!s.patient);
+      bM.classList.toggle('active', !!s.medecin);
+      bP.classList.toggle('active', !!s.patient);
     } else {
-      // Arrêté / pas démarré : tout grisé, barres immobiles.
-      chips.classList.add('stopped');
-      chipM.classList.remove('speaking');
-      chipP.classList.remove('speaking');
+      bM.classList.remove('active');
+      bP.classList.remove('active');
     }
     _vuTimer = setTimeout(loop, 120);
   })();
@@ -431,12 +522,9 @@ function startSpeakingPolling() {
 
 function stopSpeakingPolling() {
   if (_vuTimer !== null) { clearTimeout(_vuTimer); _vuTimer = null; }
-  const chips = $('vu-chips');
-  if (chips) {
-    chips.classList.add('stopped');
-    $('chip-medecin').classList.remove('speaking');
-    $('chip-patient').classList.remove('speaking');
-  }
+  const bM = $('spk-medecin'), bP = $('spk-patient');
+  if (bM) bM.classList.remove('active');
+  if (bP) bP.classList.remove('active');
 }
 
 async function loadSettingsPanel() {
@@ -482,7 +570,7 @@ function handleWindowClose() { initiateQuit(); }
 
 function initiateQuit() {
   const t = $('transcript');
-  const hasEntries = t && t.children.length > 0;
+  const hasEntries = t && t.querySelector('.turn') !== null;
   if (hasEntries) {
     show($('modal-confirm'));
   } else {
@@ -503,6 +591,7 @@ $('conf-discard').addEventListener('click', async () => {
 async function doClose() {
   stopPolling();
   stopSpeakingPolling();
+  stopChrono();
   await api('end_consultation');
 }
 

@@ -29,6 +29,7 @@ SELECTION DU PERIPHERIQUE
 ------------------------------------------------------------------------------
 """
 
+import ctypes
 import datetime
 import json
 import os
@@ -45,13 +46,22 @@ import uuid
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
-import soundcard as sc
-import webrtcvad
 from faster_whisper import WhisperModel
+
+import storage  # persistance : historique JSON + génération .docx (fonctions pures)
+# Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
+from audio import (
+    SAMPLE_RATE, CHANNELS, FRAME_MS, FRAME_SAMPLES, VAD_LEVEL,
+    SILENCE_MS, MIN_SPEECH_MS, RMS_MIN, MAX_SEG_MS,
+    lister_sorties, lister_micros, nom_sortie_defaut, nom_micro_defaut,
+    resoudre_loopback, loopback_defaut, resoudre_micro,
+    loopback_par_nom, micro_par_nom,
+    rms, garder_si_audible, audio_to_wav_buffer, VADSegmenter,
+)
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "1.2.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "1.5.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -78,14 +88,8 @@ PREFERRED_OUTPUT = "Logitech PRO X"   # machine de dev avec Sonar -> sortie phys
 LOOPBACK_NAME    = None
 MIC_NAME         = None    # force le micro sans GUI (None = afficher la liste)
 
-SAMPLE_RATE   = 16000      # impose par Whisper et webrtcvad
-FRAME_MS      = 30         # webrtcvad accepte 10/20/30 ms
-FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000   # 480 echantillons
-VAD_LEVEL     = 3          # 0 (permissif) .. 3 (agressif sur le bruit) — strict anti-hallucination
-SILENCE_MS    = 350        # silence qui marque la fin d'un tour de parole (coupe tôt → affichage plus fréquent)
-MIN_SPEECH_MS = 500        # ignore les bruits trop courts (segments plus longs = moins de bruit)
-RMS_MIN       = 0.015      # énergie minimale d'un segment ; en dessous = quasi-silence ignoré (hallucination probable)
-MAX_SEG_MS    = 4000       # flush force : le texte apparait au moins toutes les 4 s
+# Constantes audio (SAMPLE_RATE, FRAME_MS, VAD_LEVEL, SILENCE_MS, MIN_SPEECH_MS,
+# RMS_MIN, MAX_SEG_MS, FRAME_SAMPLES, CHANNELS) importées depuis audio.py.
 
 stop_event = threading.Event()
 segment_queue = queue.Queue()
@@ -144,95 +148,88 @@ def sauver_config(cfg):
 def chemin_consultations():
     return os.path.join(dossier_config(), "consultations.json")
 
-def charger_consultations():
-    """Historique des consultations. Renvoie [] si absent/corrompu."""
-    try:
-        with open(chemin_consultations(), encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, list) else []
-    except Exception:
-        return []
 
-def ajouter_consultation(record):
-    """Ajoute un enregistrement en tête de l'historique (best-effort)."""
+# L'historique (consultations.json) et la génération .docx sont gérés par le
+# module storage.py (fonctions pures + tests). Voir storage.{charger,ajouter,
+# supprimer}_consultation, maj_consultation_resume, ecrire_docx, ecrire_txt_secours.
+
+
+# ----------------------------- BARRE DE TITRE (Windows 11) -------------------
+# Personnalise la couleur de la titlebar pour s'accorder au thème (DWM).
+# Pur ctypes : aucune dépendance (FindWindowW au lieu de win32gui). Silencieux
+# si l'API n'existe pas (Windows 10) ou si la fenêtre n'est pas trouvée.
+
+# Couleurs de titlebar par thème : (fond, texte).
+_TITLEBAR_COLORS = {
+    "light": ("#FFFFFF", "#14302A"),
+    "dark":  ("#0A1714", "#F4F7F5"),
+}
+_TITRE_FENETRE = "Écho"
+
+
+def _hex_to_colorref(hex_color):
+    """#RRGGBB → COLORREF (0x00BBGGRR), entier."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return r | (g << 8) | (b << 16)
+
+
+def _trouver_fenetre(window_handle, titre):
+    """HWND fourni, sinon recherche par titre via user32 (ctypes pur).
+    restype = c_void_p pour ne pas tronquer le handle sur Windows 64 bits."""
+    if window_handle:
+        return window_handle
     try:
-        consultations = charger_consultations()
-        consultations.insert(0, record)
-        os.makedirs(dossier_config(), exist_ok=True)
-        with open(chemin_consultations(), "w", encoding="utf-8") as f:
-            json.dump(consultations, f, ensure_ascii=False, indent=2)
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype  = ctypes.c_void_p
+        user32.FindWindowW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        return user32.FindWindowW(None, titre)
+    except Exception:
+        return None
+
+
+def _dwm_set_attr(hwnd, attribut, valeur_uint):
+    """DwmSetWindowAttribute(hwnd, attribut, &valeur, 4). Renvoie True si OK."""
+    dwm = ctypes.windll.dwmapi
+    dwm.DwmSetWindowAttribute.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    val = ctypes.c_uint(valeur_uint)
+    res = dwm.DwmSetWindowAttribute(
+        ctypes.c_void_p(hwnd), ctypes.c_uint(attribut),
+        ctypes.byref(val), ctypes.sizeof(val))
+    return res == 0
+
+
+def set_titlebar_color(hex_color, window_handle=None, titre=_TITRE_FENETRE):
+    """Applique une couleur personnalisée à la titlebar Windows 11
+    (DWMWA_CAPTION_COLOR = 35). Ne plante jamais."""
+    try:
+        hwnd = _trouver_fenetre(window_handle, titre)
+        if not hwnd:
+            return
+        _dwm_set_attr(hwnd, 35, _hex_to_colorref(hex_color))  # DWMWA_CAPTION_COLOR
     except Exception:
         pass
 
-def supprimer_consultation(cid):
-    """Retire l'entrée d'id `cid` de l'historique et réécrit le fichier.
 
-    Lecture et écriture se font toujours via `with open(...)` : aucun handle
-    n'est conservé entre les appels. En cas de verrou Windows transitoire
-    (OneDrive, antivirus, indexeur), on réessaie jusqu'à 3 fois.
-
-    Renvoie l'enregistrement supprimé (dict) si trouvé, sinon None.
-    Lève PermissionError/OSError si le fichier reste inaccessible après les
-    tentatives.
-    """
-    chemin = chemin_consultations()
-    os.makedirs(dossier_config(), exist_ok=True)
-    derniere_exc = None
-    for attempt in range(3):
-        try:
-            try:
-                with open(chemin, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not isinstance(data, list):
-                    data = []
-            except FileNotFoundError:
-                data = []
-
-            supprime = None
-            restantes = []
-            for c in data:
-                if supprime is None and isinstance(c, dict) and c.get("id") == cid:
-                    supprime = c
-                else:
-                    restantes.append(c)
-
-            with open(chemin, "w", encoding="utf-8") as f:
-                json.dump(restantes, f, ensure_ascii=False, indent=2)
-            return supprime
-        except (PermissionError, OSError) as exc:
-            derniere_exc = exc
-            if attempt < 2:
-                time.sleep(0.15)
-    raise derniere_exc
-
-
-def maj_consultation_resume(cid, resume):
-    """Met à jour le champ `summary` de l'entrée d'id `cid` (best-effort avec
-    retry sur verrou Windows). Utilisé quand le résumé est ajouté après coup."""
-    chemin = chemin_consultations()
-    os.makedirs(dossier_config(), exist_ok=True)
-    derniere_exc = None
-    for attempt in range(3):
-        try:
-            try:
-                with open(chemin, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not isinstance(data, list):
-                    data = []
-            except FileNotFoundError:
-                data = []
-            for c in data:
-                if isinstance(c, dict) and c.get("id") == cid:
-                    c["summary"] = resume or ""
-                    break
-            with open(chemin, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+def set_titlebar_text_color(hex_color, window_handle=None, titre=_TITRE_FENETRE):
+    """Couleur du texte de la titlebar (DWMWA_TEXT_COLOR = 36), pour le
+    contraste (texte foncé sur barre claire, clair sur barre sombre)."""
+    try:
+        hwnd = _trouver_fenetre(window_handle, titre)
+        if not hwnd:
             return
-        except (PermissionError, OSError) as exc:
-            derniere_exc = exc
-            if attempt < 2:
-                time.sleep(0.15)
-    raise derniere_exc
+        _dwm_set_attr(hwnd, 36, _hex_to_colorref(hex_color))  # DWMWA_TEXT_COLOR
+    except Exception:
+        pass
+
+
+def appliquer_titlebar_theme(theme, window_handle=None, titre=_TITRE_FENETRE):
+    """Accorde la titlebar (fond + texte) au thème Écho ('light'/'dark')."""
+    fond, texte = _TITLEBAR_COLORS.get(
+        "dark" if theme == "dark" else "light", _TITLEBAR_COLORS["light"])
+    set_titlebar_color(fond, window_handle, titre)
+    set_titlebar_text_color(texte, window_handle, titre)
 
 
 def message_simple(titre, message, genre="info"):
@@ -248,85 +245,8 @@ def message_simple(titre, message, genre="info"):
         pass
 
 
-# ----------------------------- SELECTION PERIPHERIQUE ------------------------
-# Resolveurs robustes : renvoient None plutot que de lever une exception.
-
-def lister_sorties():
-    try:
-        return sc.all_speakers()
-    except Exception:
-        return []
-
-
-def lister_micros():
-    try:
-        return sc.all_microphones()
-    except Exception:
-        return []
-
-
-def nom_sortie_defaut():
-    try:
-        return str(sc.default_speaker().name)
-    except Exception:
-        return ""
-
-
-def nom_micro_defaut():
-    try:
-        return str(sc.default_microphone().name)
-    except Exception:
-        return ""
-
-
-def resoudre_loopback(nom):
-    """Loopback dont le nom contient `nom`, sinon None (jamais d'exception)."""
-    if not nom:
-        return None
-    try:
-        for m in sc.all_microphones(include_loopback=True):
-            if nom.lower() in m.name.lower():
-                return m
-    except Exception:
-        pass
-    return None
-
-
-def loopback_defaut():
-    """Loopback de la sortie Windows par defaut, sinon None."""
-    return resoudre_loopback(nom_sortie_defaut())
-
-
-def resoudre_micro(nom):
-    """Entree reelle dont le nom contient `nom`, sinon None."""
-    if not nom:
-        return None
-    try:
-        for m in sc.all_microphones():
-            if m.name == nom or nom.lower() in m.name.lower():
-                return m
-    except Exception:
-        pass
-    return None
-
-def loopback_par_nom(fragment):
-    """Renvoie le microphone-loopback dont le nom contient `fragment`."""
-    micros = sc.all_microphones(include_loopback=True)
-    for m in micros:
-        if fragment.lower() in m.name.lower():
-            return m
-    raise RuntimeError("Loopback introuvable pour '%s'. Dispo : %s"
-                       % (fragment, [m.name for m in micros]))
-
-
-def micro_par_nom(fragment):
-    """Renvoie l'entree reelle (sans loopback) dont le nom contient `fragment`."""
-    micros = sc.all_microphones()  # entrees reelles uniquement
-    for m in micros:
-        if m.name == fragment or fragment.lower() in m.name.lower():
-            return m
-    raise RuntimeError("Micro introuvable pour '%s'. Dispo : %s"
-                       % (fragment, [m.name for m in micros]))
+# Découverte/sélection des périphériques : déléguée à audio.py
+# (lister_sorties, lister_micros, resoudre_loopback, resoudre_micro, etc.).
 
 
 def choisir_peripheriques():
@@ -469,17 +389,10 @@ def capturer(source_factory, label):
             "La capture (%s) n'a pas pu démarrer. L'application reste utilisable." % libelle))
         return
 
-    vad = webrtcvad.Vad(VAD_LEVEL)
-    silence_frames_limit = SILENCE_MS // FRAME_MS
-    min_speech_frames    = MIN_SPEECH_MS // FRAME_MS
-    max_frames           = MAX_SEG_MS // FRAME_MS
+    segmenteur = VADSegmenter()   # segmentation VAD (logique dans audio.py)
 
     try:
-        with mic.recorder(samplerate=SAMPLE_RATE, channels=1, blocksize=FRAME_SAMPLES) as rec:
-            buffer = []
-            silence_run = 0
-            speaking = False
-
+        with mic.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS, blocksize=FRAME_SAMPLES) as rec:
             while not stop_event.is_set():
                 try:
                     data = rec.record(numframes=FRAME_SAMPLES)
@@ -493,27 +406,10 @@ def capturer(source_factory, label):
                 if gain != 1.0:
                     mono = np.clip(mono * gain, -1.0, 1.0, out=mono.copy())
 
-                pcm16 = (np.clip(mono, -1.0, 1.0) * 32767).astype(np.int16)
-                is_speech = vad.is_speech(pcm16.tobytes(), SAMPLE_RATE)
+                segment, is_speech = segmenteur.push(mono)
                 _set_speaking(label, is_speech)
-
-                if is_speech:
-                    buffer.append(mono.astype(np.float32))
-                    silence_run = 0
-                    speaking = True
-                elif speaking:
-                    buffer.append(mono.astype(np.float32))
-                    silence_run += 1
-
-                fin_de_tour = speaking and silence_run >= silence_frames_limit
-                trop_long   = len(buffer) >= max_frames
-
-                if (fin_de_tour or trop_long) and len(buffer) >= min_speech_frames:
-                    segment = np.concatenate(buffer)
+                if segment is not None:
                     segment_queue.put((label, segment))
-                    buffer, silence_run, speaking = [], 0, False
-                elif fin_de_tour:
-                    buffer, silence_run, speaking = [], 0, False
     except Exception:
         display_queue.put(("AVIS",
             "Impossible de démarrer la capture (%s). Vérifiez le périphérique audio." % libelle))
@@ -545,15 +441,6 @@ def whisper_ok():
         return False
 
 
-def qwen_ok():
-    """Vérifie que le modèle Qwen est prêt (fichier .gguf > 1,5 Go)."""
-    f = os.path.join(models_dir(), RESUME_GGUF)
-    try:
-        return os.path.isfile(f) and os.path.getsize(f) > 1_500_000_000
-    except OSError:
-        return False
-
-
 def chemin_modele():
     """Résolution du chemin Whisper :
       - frozen + modele dans APPDATA : chemin APPDATA (installeur leger)
@@ -573,11 +460,11 @@ def chemin_modele():
     return MODEL_SIZE
 
 
-# ----------------------------- RÉSUMÉ (Groq LLM + fallback Qwen local) ---------
-# Primaire : Groq LLM (3 s, qualité Llama 70B)
-# Fallback : Qwen 2.5-3B local (si pas de réseau)
+# ----------------------------- RÉSUMÉ (Groq LLM) ------------------------------
+# Moteur unique : Groq LLM (~3 s, Llama 70B). Si indisponible → pas de résumé,
+# le compte-rendu reste sauvegardé avec la transcription complète.
 
-from resume import groq_summarize, local_summarize, RESUME_GGUF, ENTETE_RESUME
+from resume import groq_summarize, ENTETE_RESUME
 
 
 # ----------------------------- PARAMÈTRES WHISPER ----------------------------
@@ -689,16 +576,21 @@ def _reset_contexte():
         _dernier_contexte = ""
 
 
-def _rms(audio):
-    """Énergie RMS d'un segment audio (numpy float). 0.0 si vide/erreur.
-    Un quasi-silence (RMS faible) fait halluciner Whisper ; une vraie voix
-    (« Merci » réellement prononcé) a un RMS élevé et passe normalement."""
-    try:
-        if audio is None or len(audio) == 0:
-            return 0.0
-        return float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
-    except Exception:
-        return 0.0
+# RMS / filtre de silence : audio.rms() et audio.garder_si_audible() (importés).
+
+
+# Hallucinations génériques de Whisper (sous-titrage), impossibles dans une vraie
+# consultation médicale — patterns volontairement restrictifs (zéro faux positif).
+PATTERNS_HALLUCINATION_SOUS_TITRAGE = [
+    "sous-titre", "sous-titrage", "sous titré", "amara.org",
+    "réalisé par la communauté", "transcription par",
+]
+
+
+def est_hallucination_generique(texte):
+    """Vrai si le texte est une hallucination de sous-titrage connue."""
+    t = (texte or "").lower()
+    return any(p in t for p in PATTERNS_HALLUCINATION_SOUS_TITRAGE)
 
 
 def _init_cloud_client():
@@ -752,12 +644,7 @@ def _transcrire_local(model, audio):
 def _transcrire_cloud(client, audio):
     """Transcrit un segment via l'API Groq (whisper-large-v3). Lève si échec.
     Le prompt combine le lexique médical et le contexte récent (cohérence)."""
-    import io
-    import soundfile as sf
-    buf = io.BytesIO()
-    sf.write(buf, audio, SAMPLE_RATE, format="WAV", subtype="PCM_16")
-    buf.seek(0)
-    buf.name = "audio.wav"
+    buf = audio_to_wav_buffer(audio)   # numpy → BytesIO WAV nommé (audio.py)
 
     with _contexte_lock:
         ctx = _dernier_contexte
@@ -775,6 +662,7 @@ def _transcrire_cloud(client, audio):
         file=buf,
         language=LANGUAGE,
         prompt=prompt_complet,
+        temperature=0,   # déterministe → moins d'hallucinations, aucun coût en vitesse
     )
     return response.text
 
@@ -816,7 +704,7 @@ def transcrire():
 
         # Seuil d'énergie : un quasi-silence génère des hallucinations
         # (« Merci » fantômes). On l'ignore sans appel API ni transcription.
-        if _rms(audio) < RMS_MIN:
+        if garder_si_audible(audio) is None:
             continue
 
         texte = None
@@ -842,376 +730,18 @@ def transcrire():
             texte = _transcrire_local(local_model, audio)
 
         texte = corriger_transcription((texte or "").strip())
-        if texte:
+        # Filtre anti-hallucination de sous-titrage : ni affiché, ni sauvegardé,
+        # ni injecté dans le contexte du prochain segment.
+        if texte and not est_hallucination_generique(texte):
             _maj_contexte(texte)   # alimente le prompt du prochain segment
             display_queue.put((label, texte))
 
 
-# ----------------------------- EXPORT DOCUMENT ------------------------------
+# ----------------------------- EXPORT DOCUMENT (delegue a storage.py) -------
 
-# Libelle accentue ecrit dans le fichier (l'interne reste sans accent).
-LOCUTEUR_FICHIER = {"Medecin": "Médecin", "Patient": "Patient"}
-
-# Couleurs pour la section transcription.
-_BLEU_PATIENT = "2E74B5"   # bleu sobre (hex sans #)
-_GRIS_TITRE   = "404040"   # gris foncé pour Heading TRANSCRIPTION
-
-def _pt(points):
-    """Convertit des points en unités Emu (utilisées par python-docx)."""
-    from docx.shared import Pt
-    return Pt(points)
-
-def _cm(centimetres):
-    from docx.shared import Cm
-    return Cm(centimetres)
-
-def _rgb(hex6):
-    """Retourne un objet RGBColor depuis une chaine hex sans #."""
-    from docx.shared import RGBColor
-    r, g, b = int(hex6[0:2], 16), int(hex6[2:4], 16), int(hex6[4:6], 16)
-    return RGBColor(r, g, b)
-
-def _forcer_style_heading(style, taille, hex_couleur, gras=True, police="Arial"):
-    """Surcharge un style Heading : police Arial, couleur imposee (non bleue)."""
-    from docx.shared import Pt, RGBColor
-    style.font.name = police
-    style.font.size = Pt(taille)
-    style.font.bold = gras
-    style.font.color.rgb = _rgb(hex_couleur)
-
-def _set_interligne(para, multiple):
-    """Fixe l'interligne d'un paragraphe (multiple, ex 1.2)."""
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-    from docx.enum.text import WD_LINE_SPACING
-    fmt = para.paragraph_format
-    fmt.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-    fmt.line_spacing = multiple
-
-def _ajouter_run(para, texte, gras=False, italique=False,
-                 couleur=None, taille=12, police="Arial"):
-    """Ajoute un run formaté dans un paragraphe."""
-    from docx.shared import Pt
-    r = para.add_run(texte)
-    r.font.name = police
-    r.font.size = Pt(taille)
-    r.bold = gras
-    r.italic = italique
-    if couleur:
-        r.font.color.rgb = _rgb(couleur)
-    return r
-
-def _ecrire_docx(chemin, infos, now, resume, entries, annexes=None):
-    """Construit et ecrit le .docx selon la structure demandee."""
-    from docx import Document
-    from docx.shared import Pt, Cm, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-
-    doc = Document()
-
-    # --- Marges A4 2,5 cm ---
-    section = doc.sections[0]
-    for section in doc.sections:
-        section.page_width  = Cm(21)
-        section.page_height = Cm(29.7)
-        section.left_margin = section.right_margin = Cm(2.5)
-        section.top_margin  = section.bottom_margin = Cm(2.5)
-    section = doc.sections[0]   # reference gardee pour la largeur images
-
-    # --- Surcharger Heading 1 (noir) et Heading 2 (noir) ---
-    _forcer_style_heading(doc.styles["Heading 1"], 14, "000000")
-    _forcer_style_heading(doc.styles["Heading 2"], 13, "000000")
-
-    # 1. Titre principal centré.
-    titre = doc.add_paragraph()
-    titre.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _set_interligne(titre, 1.2)
-    run_titre = titre.add_run("Compte-rendu de consultation")
-    run_titre.font.name = "Arial"
-    run_titre.font.size = Pt(18)
-    run_titre.bold = True
-    run_titre.font.color.rgb = RGBColor(0, 0, 0)
-    doc.add_paragraph()   # espace
-
-    # 2. Tableau patient 2 colonnes.
-    date_str  = now.strftime("%d/%m/%Y")
-    heure_str = now.strftime("%Hh%M")
-    # Seul le Nom est obligatoire ; Prénom et Né(e) le sont omis si vides.
-    lignes_patient = [("Nom", infos.get("nom") or "—")]
-    if (infos.get("prenom") or "").strip():
-        lignes_patient.append(("Prénom", infos["prenom"]))
-    if (infos.get("naissance") or "").strip():
-        lignes_patient.append(("Né(e) le", infos["naissance"]))
-    lignes_patient.append(("Date", "%s à %s" % (date_str, heure_str)))
-    lignes_patient.append(("Motif", infos.get("motif") or "—"))
-    tbl = doc.add_table(rows=len(lignes_patient), cols=2)
-    tbl.style = "Table Grid"
-    for row_idx, (lbl, val) in enumerate(lignes_patient):
-        c0, c1 = tbl.rows[row_idx].cells
-        # Largeur colonnes
-        c0.width = Cm(4.5)
-        c1.width = Cm(12.5)
-        # Étiquette en gras
-        p0 = c0.paragraphs[0]
-        r0 = p0.add_run(lbl)
-        r0.bold = True
-        r0.font.name = "Arial"
-        r0.font.size = Pt(12)
-        # Valeur
-        p1 = c1.paragraphs[0]
-        r1 = p1.add_run(val)
-        r1.font.name = "Arial"
-        r1.font.size = Pt(12)
-        # Couleur de fond légère pour l'étiquette (gris très clair)
-        from docx.oxml.ns import qn as _qn
-        from docx.oxml import OxmlElement as _OE
-        shd = _OE("w:shd")
-        shd.set(_qn("w:val"), "clear")
-        shd.set(_qn("w:color"), "auto")
-        shd.set(_qn("w:fill"), "F2F2F2")
-        c0.paragraphs[0]._p.get_or_add_pPr().append(shd)
-    doc.add_paragraph()   # espace après tableau
-
-    # 3. Séparateur horizontal (paragraphe avec bordure bottom).
-    sep_para = doc.add_paragraph()
-    sep_pPr = sep_para._p.get_or_add_pPr()
-    pBdr = OxmlElement("w:pBdr")
-    bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), "6")
-    bottom.set(qn("w:space"), "1")
-    bottom.set(qn("w:color"), "AAAAAA")
-    pBdr.append(bottom)
-    sep_pPr.append(pBdr)
-    doc.add_paragraph()
-
-    # 4. Section RÉSUMÉ (si présent).
-    if resume:
-        h1_res = doc.add_heading("Résumé de la consultation", level=1)
-        _set_interligne(h1_res, 1.2)
-
-        # Bandeau avertissement en italique grisé.
-        avert = doc.add_paragraph()
-        _set_interligne(avert, 1.2)
-        ra = avert.add_run(
-            "⚠ Résumé généré automatiquement — à relire et corriger par le médecin.")
-        ra.italic = True
-        ra.font.name = "Arial"
-        ra.font.size = Pt(11)
-        ra.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
-        doc.add_paragraph()
-
-        # Découper le résumé en sections.
-        TITRES_RESUME = [
-            "Motif :",
-            "Observations / points clés :",
-            "Traitements et prescriptions évoqués :",
-            "Suivi et recommandations :",
-        ]
-        lignes_res = resume.splitlines()
-        # Sauter la première ligne (ENTETE_RESUME déjà dans bandeau).
-        debut = 0
-        for idx, l in enumerate(lignes_res):
-            if l.strip() and not l.startswith("RÉSUMÉ"):
-                debut = idx
-                break
-
-        titre_courant = None
-        puces_courantes = []
-
-        def _flush_section():
-            if titre_courant is None:
-                return
-            h2 = doc.add_heading(titre_courant.rstrip(":"), level=2)
-            _set_interligne(h2, 1.2)
-            if puces_courantes == ["Non précisé"] or not puces_courantes:
-                p = doc.add_paragraph("Non précisé",
-                                      style="List Bullet" if False else "Normal")
-                _set_interligne(p, 1.2)
-                p.runs[0].font.name = "Arial"
-                p.runs[0].font.size = Pt(12)
-                p.runs[0].italic = True
-            else:
-                for puce in puces_courantes:
-                    p = doc.add_paragraph(style="List Bullet")
-                    _set_interligne(p, 1.2)
-                    _ajouter_run(p, puce, taille=12)
-
-        for ligne in lignes_res[debut:]:
-            ligne = ligne.strip()
-            if not ligne:
-                continue
-            matched = next((t for t in TITRES_RESUME if ligne.startswith(t)), None)
-            if matched:
-                _flush_section()
-                titre_courant = matched
-                puces_courantes = []
-            elif ligne == "Non précisé":
-                puces_courantes = ["Non précisé"]
-            elif ligne.startswith("- "):
-                puces_courantes.append(ligne[2:].strip())
-            elif ligne.startswith("-"):
-                puces_courantes.append(ligne[1:].strip())
-        _flush_section()
-        doc.add_paragraph()
-
-    # 5. Saut de page.
-    doc.add_page_break()
-
-    # 6. Section TRANSCRIPTION INTÉGRALE.
-    h1_tr = doc.add_heading("Transcription intégrale", level=1)
-    _set_interligne(h1_tr, 1.2)
-    h1_tr.runs[0].font.color.rgb = _rgb(_GRIS_TITRE)
-
-    for horodatage, locuteur, texte in entries:
-        loc_label = LOCUTEUR_FICHIER.get(locuteur, locuteur)
-        p = doc.add_paragraph()
-        _set_interligne(p, 1.15)
-        est_medecin = (locuteur == "Medecin")
-        # Préfixe locuteur + heure.
-        prefixe = "%s (%s) : " % (loc_label, horodatage)
-        r_pre = p.add_run(prefixe)
-        r_pre.font.name = "Arial"
-        r_pre.font.size = Pt(11)
-        r_pre.bold = est_medecin
-        if not est_medecin:
-            r_pre.font.color.rgb = _rgb(_BLEU_PATIENT)
-        # Texte transcrit.
-        r_txt = p.add_run(texte)
-        r_txt.font.name = "Arial"
-        r_txt.font.size = Pt(11)
-        if not est_medecin:
-            r_txt.font.color.rgb = _rgb(_BLEU_PATIENT)
-
-    # 7. Section DOCUMENTS ANNEXES (si au moins un document selectionne).
-    if annexes:
-        _inserer_annexes_docx(doc, annexes, section)
-
-    doc.save(chemin)
-
-
-def _pdf_vers_image_bytes(chemin_pdf):
-    """Convertit la 1re page d'un PDF en PNG (bytes) via PyMuPDF.
-    Renvoie les bytes PNG, ou None si PyMuPDF indisponible / erreur."""
-    try:
-        import fitz
-        doc_pdf = fitz.open(chemin_pdf)
-        page = doc_pdf[0]
-        pix = page.get_pixmap(dpi=150)
-        return pix.tobytes("png")
-    except Exception:
-        return None
-
-
-def _inserer_annexes_docx(doc, annexes, page_section):
-    """Ajoute la section DOCUMENTS ANNEXES apres la transcription.
-    annexes : liste de {"label": str, "fichier": str|None}
-    Chaque document est independant — un echec n'arrete pas les autres.
-    """
-    import io
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-    from docx.shared import Cm, Pt
-
-    # Séparateur horizontal.
-    sep_para = doc.add_paragraph()
-    pBdr = OxmlElement("w:pBdr")
-    bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), "6")
-    bottom.set(qn("w:space"), "1")
-    bottom.set(qn("w:color"), "AAAAAA")
-    pBdr.append(bottom)
-    sep_para._p.get_or_add_pPr().append(pBdr)
-
-    h1_ann = doc.add_heading("Documents annexes", level=1)
-    _set_interligne(h1_ann, 1.2)
-    h1_ann.runs[0].font.color.rgb = _rgb(_GRIS_TITRE)
-
-    # Largeur utile de la page (pour les images).
-    larg_page = (page_section.page_width
-                 - page_section.left_margin
-                 - page_section.right_margin)
-
-    for doc_info in annexes:
-        label   = doc_info.get("label", "Document")
-        fichier = doc_info.get("fichier")   # peut être None
-
-        h2 = doc.add_heading(label, level=2)
-        _set_interligne(h2, 1.2)
-
-        if not fichier:
-            # Case cochée mais aucun fichier joint.
-            p = doc.add_paragraph()
-            _set_interligne(p, 1.2)
-            _ajouter_run(p, "Document remis au patient lors de la consultation.",
-                         italique=True, couleur="808080", taille=11)
-            continue
-
-        ext = os.path.splitext(fichier)[1].lower()
-
-        # --- Image directe (JPG / PNG) ---
-        if ext in (".jpg", ".jpeg", ".png"):
-            try:
-                p_img = doc.add_paragraph()
-                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p_img.add_run().add_picture(fichier, width=larg_page)
-            except Exception:
-                p = doc.add_paragraph()
-                _ajouter_run(p, "Image jointe — impossible d'incorporer le fichier.",
-                             italique=True, couleur="808080", taille=11)
-            continue
-
-        # --- PDF : tentative de conversion via PyMuPDF ---
-        if ext == ".pdf":
-            img_bytes = _pdf_vers_image_bytes(fichier)
-            if img_bytes:
-                try:
-                    p_img = doc.add_paragraph()
-                    p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    p_img.add_run().add_picture(
-                        io.BytesIO(img_bytes), width=larg_page)
-                    img_bytes = img_bytes   # marqueur succès
-                except Exception:
-                    img_bytes = None
-            if not img_bytes:
-                p = doc.add_paragraph()
-                _ajouter_run(
-                    p,
-                    "Document PDF joint lors de la consultation — "
-                    "conserver séparément.",
-                    italique=True, couleur="808080", taille=11)
-            continue
-
-        # --- Autre format ---
-        p = doc.add_paragraph()
-        _ajouter_run(p, "Fichier joint : " + os.path.basename(fichier),
-                     italique=True, couleur="808080", taille=11)
-
-
-def _ecrire_txt_secours(chemin, infos, now, resume, entries):
-    """Fallback .txt si python-docx echoue (la transcription ne doit jamais etre perdue)."""
-    sep = "=" * 60
-    with open(chemin, "w", encoding="utf-8") as f:
-        f.write(sep + "\n")
-        entete = ("%s %s" % ((infos.get("nom") or "").upper(),
-                             infos.get("prenom") or "")).strip()
-        f.write("  CONSULTATION — %s\n" % entete)
-        if (infos.get("naissance") or "").strip():
-            f.write("  Né(e) le : %s\n" % infos["naissance"])
-        f.write("  Date : %s à %s\n" % (now.strftime("%d/%m/%Y"), now.strftime("%Hh%M")))
-        f.write("  Motif : %s\n" % (infos.get("motif") or "—"))
-        f.write(sep + "\n\n")
-        if resume:
-            f.write(resume.strip() + "\n\n")
-            f.write(sep + "\n  TRANSCRIPTION INTÉGRALE\n" + sep + "\n\n")
-        for horodatage, locuteur, texte in entries:
-            f.write("[%s] %s : %s\n" % (
-                horodatage, LOCUTEUR_FICHIER.get(locuteur, locuteur), texte))
-
+# La generation .docx/.txt et les constantes associees vivent dans storage.py.
+# Alias conserve pour construire le transcript du resume (libelle accentue).
+LOCUTEUR_FICHIER = storage.LOCUTEUR_FICHIER
 
 # ----------------------------- INTERFACE -------------------------------------
 
@@ -1344,8 +874,8 @@ class Overlay:
             for h, loc, t in self.entries)
 
     def _generer_resume_avec_progres(self, transcript):
-        """Genere le resume via Groq (rapide), fallback Qwen local si reseau
-        indisponible. Fenetre de progression dans un thread."""
+        """Genere le resume via Groq (rapide). Si indisponible, aucun resume
+        (None) — la transcription reste sauvegardee. Progression dans un thread."""
         dlg = tk.Toplevel(self.root)
         dlg.title("Résumé")
         dlg.configure(bg="#0d1117")
@@ -1364,11 +894,7 @@ class Overlay:
 
         def worker():
             try:
-                texte = groq_summarize(transcript, GROQ_API_KEY)
-                if texte is None:
-                    lbl.config(text="Résumé local (hors-ligne)...")
-                    texte = local_summarize(transcript)
-                etat["resume"] = texte
+                etat["resume"] = groq_summarize(transcript, GROQ_API_KEY)
             except Exception:
                 etat["resume"] = None
             etat["done"] = True
@@ -1682,14 +1208,14 @@ class Overlay:
 
         # Tente l'enregistrement docx ; repli txt si python-docx indisponible.
         try:
-            _ecrire_docx(chemin, infos, now, resume, self.entries, annexes=annexes)
+            storage.ecrire_docx(chemin, infos, now, resume, self.entries, annexes=annexes)
         except Exception:
             # Fallback .txt (ne jamais perdre la transcription).
             chemin_txt = re.sub(r"\.docx$", ".txt", chemin, flags=re.IGNORECASE)
             if not chemin_txt.lower().endswith(".txt"):
                 chemin_txt += ".txt"
             try:
-                _ecrire_txt_secours(chemin_txt, infos, now, resume, self.entries)
+                storage.ecrire_txt_secours(chemin_txt, infos, now, resume, self.entries)
                 message_simple(
                     "Enregistrement Word impossible",
                     "Le document Word n'a pas pu être créé.\n\n"
@@ -1766,8 +1292,6 @@ _logging.basicConfig(
 
 _download_state = {
     "whisper": {"downloaded": 0, "total": 1_700_000_000, "speed": 0.0,
-                "done": False, "error": None},
-    "qwen":    {"downloaded": 0, "total": 2_050_000_000, "speed": 0.0,
                 "done": False, "error": None},
     # Mise à jour de l'application (EchoSetup.exe téléchargé dans %TEMP%).
     "update":  {"downloaded": 0, "total": 195_000_000, "speed": 0.0,
@@ -1876,13 +1400,6 @@ def _taille_dossier(chemin):
     return total
 
 
-def _taille_fichier(chemin):
-    try:
-        return os.path.getsize(chemin) if os.path.isfile(chemin) else 0
-    except OSError:
-        return 0
-
-
 def _progres_whisper_loop(dest_dir, stop_dl):
     """Thread de polling pour la progression Whisper."""
     prev_dl   = 0
@@ -1902,28 +1419,6 @@ def _progres_whisper_loop(dest_dir, stop_dl):
             if not s["done"] and not s["error"]:
                 s["downloaded"] = dl
                 s["speed"]      = round(speed / 1_000_000, 1)  # Mo/s
-        time.sleep(0.5)
-
-
-def _progres_qwen_loop(dest_file, stop_dl):
-    """Thread de polling pour la progression Qwen."""
-    prev_dl   = 0
-    prev_time = time.time()
-    while not stop_dl.is_set():
-        dl  = _taille_fichier(dest_file)
-        now = time.time()
-        dt  = now - prev_time
-        if dt > 0:
-            speed = (dl - prev_dl) / dt
-        else:
-            speed = 0.0
-        prev_dl   = dl
-        prev_time = now
-        with _download_lock:
-            s = _download_state["qwen"]
-            if not s["done"] and not s["error"]:
-                s["downloaded"] = dl
-                s["speed"]      = round(speed / 1_000_000, 1)
         time.sleep(0.5)
 
 
@@ -1964,43 +1459,6 @@ def _dl_whisper():
         stop_dl.set()
 
 
-def _dl_qwen():
-    """Télécharge le modèle Qwen depuis HuggingFace (avec reprise)."""
-    import logging
-    try:
-        logging.debug("_dl_qwen: début")
-        from huggingface_hub import hf_hub_download
-        dest_dir  = models_dir()
-        dest_file = os.path.join(dest_dir, RESUME_GGUF)
-        logging.debug("_dl_qwen: dest_file = %s", dest_file)
-        os.makedirs(dest_dir, exist_ok=True)
-        stop_dl = threading.Event()
-        t_prog  = threading.Thread(target=_progres_qwen_loop,
-                                   args=(dest_file, stop_dl), daemon=True)
-        t_prog.start()
-        logging.debug("_dl_qwen: hf_hub_download...")
-        hf_hub_download(
-            repo_id="bartowski/Qwen2.5-3B-Instruct-GGUF",
-            filename=RESUME_GGUF,
-            local_dir=dest_dir,
-            resume_download=True,
-        )
-        logging.debug("_dl_qwen: terminé avec succès")
-        with _download_lock:
-            _download_state["qwen"]["done"]       = True
-            _download_state["qwen"]["downloaded"] = _download_state["qwen"]["total"]
-            _download_state["qwen"]["speed"]      = 0.0
-    except Exception as exc:
-        logging.exception("_dl_qwen: exception")
-        with _download_lock:
-            _download_state["qwen"]["error"] = (
-                "Téléchargement Qwen interrompu. "
-                "Vérifiez votre connexion internet et réessayez. "
-                "(" + str(exc)[:80] + ")")
-    finally:
-        stop_dl.set()
-
-
 def _run_downloads(models_to_dl):
     """Télécharge séquentiellement les modèles demandés."""
     import logging
@@ -2011,8 +1469,6 @@ def _run_downloads(models_to_dl):
         logging.debug("running=True")
         if "whisper" in models_to_dl:
             _dl_whisper()
-        if "qwen" in models_to_dl:
-            _dl_qwen()
         logging.debug("_run_downloads terminé avec succès")
     except Exception:
         logging.exception("_run_downloads: exception")
@@ -2226,6 +1682,7 @@ class Api:
             "save_folder":       cfg.get("dossier_sauvegarde", ""),
             "gain_patient":      cfg.get("gain_patient", 1.0),
             "gain_mic":          cfg.get("gain_mic", 1.0),
+            "theme":             cfg.get("theme") or "light",
         }
 
     def complete_onboarding(self, doctor_name, mic_name, output_name):
@@ -2250,6 +1707,7 @@ class Api:
             "save_folder":   cfg.get("dossier_sauvegarde", ""),
             "gain_patient":  cfg.get("gain_patient", 1.0),
             "gain_mic":      cfg.get("gain_mic", 1.0),
+            "theme":         cfg.get("theme") or "light",
             **devs,
         }
 
@@ -2270,7 +1728,16 @@ class Api:
             self.set_volume_mic(v)
         if "sortie" in data: cfg["sortie"] = data["sortie"]
         if "micro"  in data: cfg["micro"]  = data["micro"]
+        if "theme"  in data:
+            cfg["theme"] = "dark" if data["theme"] == "dark" else "light"
+            appliquer_titlebar_theme(cfg["theme"])   # accorde la titlebar
         sauver_config(cfg)
+        return {"ok": True}
+
+    def apply_theme(self, theme):
+        """Accorde la barre de titre Windows au thème courant. Appelé par le JS
+        juste après avoir changé data-theme sur <html>. Ne plante jamais."""
+        appliquer_titlebar_theme("dark" if theme == "dark" else "light")
         return {"ok": True}
 
     def backup_model_status(self):
@@ -2348,6 +1815,11 @@ class Api:
             if self._overlay_win:
                 self._overlay_win.show()
                 self._overlay_win.restore()
+                # Réinitialise l'UI de l'overlay (chrono, transcript, état d'attente).
+                try:
+                    self._overlay_win.evaluate_js("startConsultationUI()")
+                except Exception:
+                    pass
         return result
 
     def end_consultation(self):
@@ -2389,8 +1861,9 @@ class Api:
     # ===== FLUX DE SAUVEGARDE (orchestré depuis le JS de l'overlay) ==========
 
     def generate_resume_async(self):
-        """Lance la génération du résumé (Groq, fallback Qwen) dans un thread.
-        JS pollera get_resume_status() pour la progression."""
+        """Lance la génération du résumé via Groq dans un thread.
+        JS pollera get_resume_status(). Si Groq échoue → statut "error"
+        (la transcription est déjà sauvegardée, pas de blocage)."""
         self._resume_status = "loading"
         self._resume_text   = None
 
@@ -2403,8 +1876,6 @@ class Api:
                     "[%s] %s : %s" % (h, LOCUTEUR_FICHIER.get(loc, loc), t)
                     for h, loc, t in entries)
                 texte = groq_summarize(transcript, GROQ_API_KEY)
-                if texte is None:
-                    texte = local_summarize(transcript)
                 self._resume_text   = texte
                 self._resume_status = "done" if texte else "error"
             except Exception:
@@ -2446,13 +1917,13 @@ class Api:
         with self._lock:
             entries = list(self._entries)
         try:
-            _ecrire_docx(file_path, self._infos, now,
-                         resume_text or None, entries, annexes=annexes or [])
+            storage.ecrire_docx(file_path, self._infos, now,
+                                resume_text or None, entries, annexes=annexes or [])
         except Exception as exc:
             # Fallback txt.
             txt_path = re.sub(r"\.docx$", ".txt", file_path, flags=re.IGNORECASE)
             try:
-                _ecrire_txt_secours(txt_path, self._infos, now, resume_text, entries)
+                storage.ecrire_txt_secours(txt_path, self._infos, now, resume_text, entries)
                 file_path = txt_path
             except Exception:
                 return {"ok": False, "error": str(exc)}
@@ -2466,7 +1937,7 @@ class Api:
         # Ajoute au journal.
         cid = str(uuid.uuid4())
         dur = int((datetime.datetime.now() - now).total_seconds() / 60)
-        ajouter_consultation({
+        storage.ajouter_consultation(chemin_consultations(), {
             "id":           cid,
             "date":         now.isoformat(),
             "patient":      self._infos,
@@ -2498,15 +1969,16 @@ class Api:
             entries = list(self._entries)
         annexes = getattr(self, "_saved_annexes", []) or []
         try:
-            _ecrire_docx(fp, self._infos, now,
-                         resume_text or None, entries, annexes=annexes)
+            storage.ecrire_docx(fp, self._infos, now,
+                                resume_text or None, entries, annexes=annexes)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         # Met à jour le résumé dans l'historique (best-effort).
         cid = getattr(self, "_saved_id", None)
         if cid:
             try:
-                maj_consultation_resume(cid, resume_text or "")
+                storage.maj_consultation_resume(chemin_consultations(), cid,
+                                               resume_text or "")
             except Exception:
                 pass
         return {"ok": True}
@@ -2514,7 +1986,43 @@ class Api:
     # ===== HISTORIQUE =========================================================
 
     def get_consultations(self):
-        return charger_consultations()
+        return storage.charger_consultations(chemin_consultations())
+
+    def get_stats(self):
+        """Statistiques de l'accueil calculées depuis consultations.json :
+        nb ce mois, nb cette semaine, patients distincts, durée moyenne (min)."""
+        consultations = storage.charger_consultations(chemin_consultations())
+        now = datetime.datetime.now()
+        debut_mois = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        # Lundi de la semaine courante.
+        debut_sem = (now - datetime.timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+
+        mois = semaine = 0
+        noms = set()
+        durees = []
+        for c in consultations:
+            if not isinstance(c, dict):
+                continue
+            try:
+                d = datetime.datetime.fromisoformat(c.get("date", ""))
+            except Exception:
+                d = None
+            if d is not None:
+                if d >= debut_mois:
+                    mois += 1
+                if d >= debut_sem:
+                    semaine += 1
+            nom = ((c.get("patient") or {}).get("nom") or "").strip().lower()
+            if nom:
+                noms.add(nom)
+            dm = c.get("duration_min")
+            if isinstance(dm, (int, float)) and dm > 0:
+                durees.append(dm)
+
+        duree_moy = round(sum(durees) / len(durees)) if durees else 0
+        return {"mois": mois, "semaine": semaine,
+                "patients": len(noms), "duree_moy": duree_moy}
 
     def delete_consultation(self, cid):
         """Retire l'entrée d'id `cid` de consultations.json.
@@ -2522,7 +2030,7 @@ class Api:
         Le fichier .docx sur le disque est conservé.
         """
         try:
-            supprimer_consultation(cid)
+            storage.supprimer_consultation(chemin_consultations(), cid)
             return {"ok": True}
         except (PermissionError, OSError):
             return {"ok": False,
@@ -2537,21 +2045,13 @@ class Api:
         sans erreur.
         """
         try:
-            record = supprimer_consultation(cid)
+            storage.supprimer_consultation_avec_fichier(chemin_consultations(), cid)
+            return {"ok": True}
         except (PermissionError, OSError):
             return {"ok": False,
                     "error": "Fichier temporairement inaccessible. Réessayez."}
         except Exception as e:
             return {"ok": False, "error": str(e)}
-        try:
-            fp = (record or {}).get("file_path")
-            if fp and os.path.isfile(fp):
-                os.remove(fp)
-        except Exception:
-            # Jamais d'erreur visible si le fichier a déjà été
-            # déplacé/supprimé manuellement ou est verrouillé.
-            pass
-        return {"ok": True}
 
     # ===== FICHIERS (OS) ======================================================
 
@@ -2579,25 +2079,21 @@ class Api:
     # ===== MODÈLES — VÉRIFICATION ET TÉLÉCHARGEMENT ==========================
 
     def check_models(self):
-        """Vérifie si les modèles sont présents et valides."""
-        return {"whisper_ok": whisper_ok(), "qwen_ok": qwen_ok()}
+        """Vérifie les modèles présents. Groq étant le moteur principal pour
+        la transcription ET le résumé, AUCUN modèle n'est requis au premier
+        lancement (Whisper de secours téléchargé à la demande)."""
+        return {"whisper_ok": whisper_ok()}
 
     def start_downloads(self):
-        """Télécharge les modèles demandés (Qwen en fallback optionnel).
-        Plus rien n'est forcé au premier lancement — Groq est le moteur
-        principal pour la transcription ET le résumé."""
+        """Premier lancement : aucun téléchargement (Groq cloud pour tout).
+        Le modèle Whisper de secours est récupéré à la demande si besoin."""
         import logging
         try:
-            logging.debug("start_downloads() appelé")
             with _download_lock:
                 if _download_state["running"]:
-                    logging.debug("déjà en cours")
                     return {"ok": True, "msg": "already running"}
-                # Whisper et Qwen marqués terminés : rien à télécharger par défaut.
-                for k in ("whisper", "qwen"):
-                    _download_state[k]["done"] = True
-
-            logging.debug("aucun modèle à télécharger (Groq cloud)")
+                _download_state["whisper"]["done"] = True
+            logging.debug("start_downloads: aucun modèle à télécharger (Groq cloud)")
             return {"ok": True}
         except Exception as e:
             logging.exception("start_downloads: exception")
@@ -2611,7 +2107,7 @@ class Api:
 
     def retry_download(self, model):
         """Remet error=None et relance le téléchargement d'un modèle spécifique."""
-        if model not in ("whisper", "qwen"):
+        if model != "whisper":
             return {"ok": False, "error": "modèle inconnu"}
         with _download_lock:
             if _download_state["running"]:
@@ -2716,6 +2212,11 @@ def _main_webview():
     def on_start():
         api._webview_mod = webview
         overlay_win.hide()   # L'overlay est caché jusqu'au début d'une consultation.
+        # Accorde la barre de titre au thème enregistré (best-effort, Windows 11).
+        try:
+            appliquer_titlebar_theme(charger_config().get("theme") or "light")
+        except Exception:
+            pass
 
     webview.start(func=on_start, debug=("--dev" in sys.argv))
     stop_event.set()
@@ -2742,8 +2243,7 @@ def selftest():
         from huggingface_hub import hf_hub_download  # noqa: F401 — requis pour dl
         frozen = getattr(sys, "frozen", False)
         w_ok   = whisper_ok()
-        q_ok   = qwen_ok()
-        models_info = "whisper=%s qwen=%s" % (w_ok, q_ok)
+        models_info = "whisper=%s" % (w_ok,)
         # Charge le modèle Whisper si disponible, sinon valide juste les imports.
         if w_ok:
             source = chemin_modele()

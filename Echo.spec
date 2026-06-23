@@ -17,8 +17,6 @@ tmp_ret = collect_all('soundcard')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('webrtcvad')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('llama_cpp')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('huggingface_hub')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('requests')
@@ -47,6 +45,10 @@ hiddenimports += [
     # Clé API Groq embarquée (fichier gitignored, présent au build).
     'GROQ_KEY',
     'pydantic_core',
+    # Modules locaux extraits du monolithe.
+    'storage',
+    'resume',
+    'audio',
 ]
 
 
