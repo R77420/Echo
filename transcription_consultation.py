@@ -32,6 +32,8 @@ SELECTION DU PERIPHERIQUE
 import ctypes
 import datetime
 import json
+import logging
+import logging.handlers
 import os
 import queue
 import re
@@ -42,7 +44,9 @@ import threading
 import time
 import tkinter as tk
 import unicodedata
+import urllib.request
 import uuid
+import webbrowser
 from tkinter import filedialog, messagebox, ttk
 
 import numpy as np
@@ -52,16 +56,38 @@ import storage  # persistance : historique JSON + génération .docx (fonctions 
 # Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
 from audio import (
     SAMPLE_RATE, CHANNELS, FRAME_MS, FRAME_SAMPLES, VAD_LEVEL,
-    SILENCE_MS, MIN_SPEECH_MS, RMS_MIN, MAX_SEG_MS,
+    SILENCE_MS, MIN_SPEECH_MS, RMS_MIN, RMS_MIN_LOOPBACK, RMS_MIN_MIC, MAX_SEG_MS,
     lister_sorties, lister_micros, nom_sortie_defaut, nom_micro_defaut,
     resoudre_loopback, loopback_defaut, resoudre_micro,
     loopback_par_nom, micro_par_nom,
     rms, garder_si_audible, audio_to_wav_buffer, VADSegmenter,
 )
 
+# ----------------------------- DEBUG LOGGING ----------------------------------
+# Activé uniquement si %APPDATA%\Echo\debug_mode existe (flag fichier).
+# Écrit dans %APPDATA%\Echo\capture_debug.log — jamais dans l'overlay.
+
+def _setup_debug_logger():
+    _flag = os.path.join(os.environ.get("APPDATA", ""), "Echo", "debug_mode")
+    if not os.path.exists(_flag):
+        return logging.getLogger("echo.capture")  # logger inactif (NullHandler)
+    _log_path = os.path.join(os.environ.get("APPDATA", ""), "Echo", "capture_debug.log")
+    _logger = logging.getLogger("echo.capture")
+    _logger.setLevel(logging.DEBUG)
+    if not _logger.handlers:
+        _h = logging.handlers.RotatingFileHandler(
+            _log_path, maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8"
+        )
+        _h.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        _logger.addHandler(_h)
+        _logger.propagate = False
+    return _logger
+
+_caplog = _setup_debug_logger()
+
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "1.5.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "1.6.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -379,6 +405,8 @@ def capturer(source_factory, label):
     l'autre flux ni l'application.
     """
     libelle = "patient" if label == "Patient" else "médecin"
+    is_loopback = (label == "Patient")
+    rms_seuil = RMS_MIN_LOOPBACK if is_loopback else RMS_MIN_MIC
 
     try:
         mic = source_factory()
@@ -390,6 +418,7 @@ def capturer(source_factory, label):
         return
 
     segmenteur = VADSegmenter()   # segmentation VAD (logique dans audio.py)
+    _caplog.debug("[%s] thread démarré — seuil RMS=%.4f", label.upper(), rms_seuil)
 
     try:
         with mic.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS, blocksize=FRAME_SAMPLES) as rec:
@@ -406,10 +435,22 @@ def capturer(source_factory, label):
                 if gain != 1.0:
                     mono = np.clip(mono * gain, -1.0, 1.0, out=mono.copy())
 
+                frame_rms = rms(mono)
                 segment, is_speech = segmenteur.push(mono)
+                _caplog.debug("[%s VAD] is_speech=%s rms=%.4f", label.upper(), is_speech, frame_rms)
                 _set_speaking(label, is_speech)
                 if segment is not None:
-                    segment_queue.put((label, segment))
+                    seg_rms = rms(segment)
+                    audible = garder_si_audible(segment, seuil=rms_seuil)
+                    _caplog.debug(
+                        "[%s] segment dur=%.2fs rms=%.4f keep=%s",
+                        label.upper(),
+                        len(segment) / SAMPLE_RATE,
+                        seg_rms,
+                        "OUI" if audible is not None else "NON (RMS trop bas)",
+                    )
+                    if audible is not None:
+                        segment_queue.put((label, segment))
     except Exception:
         display_queue.put(("AVIS",
             "Impossible de démarrer la capture (%s). Vérifiez le périphérique audio." % libelle))
@@ -579,18 +620,45 @@ def _reset_contexte():
 # RMS / filtre de silence : audio.rms() et audio.garder_si_audible() (importés).
 
 
-# Hallucinations génériques de Whisper (sous-titrage), impossibles dans une vraie
-# consultation médicale — patterns volontairement restrictifs (zéro faux positif).
+# Hallucinations connues de Whisper — patterns découverts en test terrain.
+# Règle : zéro faux positif, donc on n'ajoute que ce qui est impossible
+# dans une vraie consultation médicale.
 PATTERNS_HALLUCINATION_SOUS_TITRAGE = [
+    # Sous-titrage générique
     "sous-titre", "sous-titrage", "sous titré", "amara.org",
     "réalisé par la communauté", "transcription par",
+    # Transitions de remplissage Whisper découvertes en test
+    "et d'autres", "et maladies", "et douleurs",
+    "et lesquels", "et plus de choses",
+    "et moi.", "et la vie.",
 ]
 
 
 def est_hallucination_generique(texte):
-    """Vrai si le texte est une hallucination de sous-titrage connue."""
-    t = (texte or "").lower()
-    return any(p in t for p in PATTERNS_HALLUCINATION_SOUS_TITRAGE)
+    """Vrai si le texte est une hallucination Whisper connue.
+
+    Trois filtres :
+    1. Pattern exact (liste PATTERNS_HALLUCINATION_SOUS_TITRAGE)
+    2. Segment court (≤ 4 mots) commençant par « et » → transition de remplissage
+    3. Segment d'un seul mot ou ponctuation seule → bruit
+    """
+    t = (texte or "").strip().lower()
+    if not t:
+        return True
+    # Filtre 1 : patterns connus
+    if any(p in t for p in PATTERNS_HALLUCINATION_SOUS_TITRAGE):
+        return True
+    mots = t.split()
+    # Filtre 2 : ≤ 4 mots et commence par "et " → hallucination de transition
+    if len(mots) <= 4 and t.startswith("et "):
+        return True
+    # Filtre 3 : un seul mot (ou ponctuation seule) → bruit
+    if len(mots) <= 1:
+        return True
+    # Filtre 4 : mot unique répété 3+ fois → boucle Whisper
+    if len(set(mots)) == 1 and len(mots) >= 3:
+        return True
+    return False
 
 
 def _init_cloud_client():
@@ -702,11 +770,8 @@ def transcrire():
         except queue.Empty:
             continue
 
-        # Seuil d'énergie : un quasi-silence génère des hallucinations
-        # (« Merci » fantômes). On l'ignore sans appel API ni transcription.
-        if garder_si_audible(audio) is None:
-            continue
-
+        # Filtre RMS déjà appliqué dans capturer() avec seuil adapté
+        # (RMS_MIN_LOOPBACK pour patient, RMS_MIN_MIC pour médecin).
         texte = None
         if cloud_on:
             try:
@@ -1478,6 +1543,47 @@ def _run_downloads(models_to_dl):
             _download_state["running"] = False
 
 
+# ----------------------------- BACKEND LICENCE/AUTH --------------------------
+
+_ECHO_API = "https://muxoyiitqdnehuvbwcac.supabase.co/functions/v1/echo-api"
+_SUPABASE_ANON = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11eG95aWl0cWRuZWh1dmJ3Y2FjIiwicm9sZSI6"
+    "ImFub24iLCJpYXQiOjE3ODI0MTA0NjksImV4cCI6MjA5Nzk4NjQ2OX0"
+    ".4E40ECsuOlPSJIPfHdAPZc771qRa_qF6DDSKhWn76TA"
+)
+
+
+def _appel_api(endpoint, payload, timeout=10):
+    """POST JSON vers l'API Écho. Renvoie le dict JSON ou None si erreur réseau."""
+    url = _ECHO_API + "/" + endpoint.lstrip("/")
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + _SUPABASE_ANON,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _verifier_licence(cle_licence):
+    """Vérifie la validité de la licence auprès du backend.
+    Retourne dict avec clés valide, licence_active, en_essai, jours_restants.
+    En cas d'erreur réseau : accès autorisé par défaut (fail-open)."""
+    result = _appel_api("verifier-licence", {"cle_licence": cle_licence})
+    if result is None:
+        # Pas de réseau → on laisse passer (fail-open, pas de blocage offline)
+        return {"valide": True, "licence_active": True}
+    return result
+
+
 # ----------------------------- API PYWEBVIEW ---------------------------------
 
 class Api:
@@ -1674,9 +1780,32 @@ class Api:
     # ===== ÉTAT GLOBAL / ONBOARDING ==========================================
 
     def get_app_state(self):
-        """Retourne l'état de l'appli : onboarding fait, nom médecin, etc."""
+        """Retourne l'état de l'appli : licence, onboarding, nom médecin, etc."""
         cfg = charger_config()
+        cle = cfg.get("cle_licence", "")
+
+        licence_ok      = False
+        licence_expired = False
+        en_essai        = False
+        jours_restants  = 0
+
+        if cle:
+            statut = _verifier_licence(cle)
+            if statut.get("valide"):
+                licence_ok = True
+                if statut.get("en_essai"):
+                    en_essai = True
+                    jours_restants = statut.get("jours_restants", 0)
+                    cfg["jours_restants"] = jours_restants
+                    sauver_config(cfg)
+            else:
+                licence_expired = True
+
         return {
+            "licence_ok":        licence_ok,
+            "licence_expired":   licence_expired,
+            "en_essai":          en_essai,
+            "jours_restants":    jours_restants,
             "onboarding_done":   bool(cfg.get("doctor_name")),
             "doctor_name":       cfg.get("doctor_name", ""),
             "save_folder":       cfg.get("dossier_sauvegarde", ""),
@@ -1693,6 +1822,91 @@ class Api:
         cfg["doctor_name"] = doctor_name.strip()
         cfg["micro"]  = mic_name
         cfg["sortie"] = output_name
+        sauver_config(cfg)
+        return {"ok": True}
+
+    # ===== AUTH / LICENCE ====================================================
+
+    def auth_inscription(self, nom, email, password, specialty=""):
+        """Inscrit un nouveau médecin. Stocke cle_licence et infos dans config."""
+        res = _appel_api("inscription", {
+            "nom": nom, "email": email,
+            "mot_de_passe": password, "specialite": specialty,
+        })
+        if not res:
+            return {"ok": False, "error": "Erreur réseau. Vérifiez votre connexion."}
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "Inscription échouée.")}
+        cfg = charger_config()
+        cfg["cle_licence"]   = res.get("cle_licence", "")
+        cfg["medecin_id"]    = res.get("medecin_id", "")
+        cfg["doctor_name"]   = res.get("nom", nom)
+        cfg["email"]         = email
+        cfg["specialty"]     = specialty
+        cfg["jours_restants"] = res.get("jours_restants", 0)
+        sauver_config(cfg)
+        return {
+            "ok": True,
+            "en_essai": res.get("en_essai", False),
+            "jours_restants": res.get("jours_restants", 0),
+        }
+
+    def auth_connexion(self, email, password):
+        """Connecte un médecin existant. Stocke cle_licence et infos dans config."""
+        res = _appel_api("connexion", {"email": email, "mot_de_passe": password})
+        if not res:
+            return {"ok": False, "error": "Erreur réseau. Vérifiez votre connexion."}
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "Identifiants incorrects.")}
+        cfg = charger_config()
+        cfg["cle_licence"]   = res.get("cle_licence", "")
+        cfg["medecin_id"]    = res.get("medecin_id", "")
+        cfg["doctor_name"]   = res.get("nom", "")
+        cfg["email"]         = email
+        cfg["jours_restants"] = res.get("jours_restants", 0)
+        sauver_config(cfg)
+        expired = not res.get("valide", True)
+        return {
+            "ok": True,
+            "expired":  expired,
+            "en_essai": res.get("en_essai", False),
+            "jours_restants": res.get("jours_restants", 0),
+        }
+
+    def ouvrir_lien_paiement(self, type_paiement="abonnement"):
+        """Crée un lien de paiement Stripe via le backend et l'ouvre dans le navigateur."""
+        cfg = charger_config()
+        medecin_id = cfg.get("medecin_id", "")
+        print(f"[PAIEMENT] type={type_paiement} medecin_id={medecin_id!r}")
+        res = _appel_api("creer-paiement", {
+            "medecin_id": medecin_id,
+            "type": type_paiement,
+        })
+        url = res.get("url") if res else None
+        print(f"[PAIEMENT] réponse={res} url={url!r}")
+        if url:
+            webbrowser.open(url)
+            return {"ok": True}
+        return {"ok": False, "error": "Impossible d'obtenir le lien de paiement."}
+
+    def ouvrir_mailto(self, adresse):
+        """Ouvre le client mail avec l'adresse de support."""
+        webbrowser.open("mailto:" + adresse)
+        return {"ok": True}
+
+    def get_profile_info(self):
+        """Retourne email et spécialité pour le panneau profil."""
+        cfg = charger_config()
+        return {
+            "email":    cfg.get("email", ""),
+            "specialty": cfg.get("specialty", ""),
+        }
+
+    def deconnecter(self):
+        """Efface les infos de session (licence, médecin) sans toucher devices/theme."""
+        cfg = charger_config()
+        for key in ("cle_licence", "medecin_id", "doctor_name", "jours_restants", "email", "specialty"):
+            cfg.pop(key, None)
         sauver_config(cfg)
         return {"ok": True}
 

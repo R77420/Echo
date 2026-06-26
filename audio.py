@@ -20,11 +20,13 @@ SAMPLE_RATE   = 16000      # imposé par Whisper et webrtcvad
 CHANNELS      = 1          # mono
 FRAME_MS      = 30         # webrtcvad accepte 10/20/30 ms (= CHUNK_MS)
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000   # 480 échantillons / frame
-VAD_LEVEL     = 3          # 0 (permissif) .. 3 (agressif) — strict anti-hallucination
-SILENCE_MS    = 350        # silence marquant la fin d'un tour de parole
-MIN_SPEECH_MS = 500        # ignore les bruits trop courts
-RMS_MIN       = 0.015      # énergie minimale ; en dessous = quasi-silence ignoré
-MAX_SEG_MS    = 4000       # flush forcé : un segment au moins toutes les 4 s
+VAD_LEVEL          = 2          # 0 (permissif) .. 3 (agressif) — niveau 2 pour audio WebRTC compressé
+SILENCE_MS         = 350        # silence marquant la fin d'un tour de parole
+MIN_SPEECH_MS      = 300        # ignore les bruits trop courts (réduit pour capturer parole courte)
+RMS_MIN            = 0.008      # énergie minimale globale (assoupli)
+RMS_MIN_LOOPBACK   = 0.006      # seuil loopback : audio compressé/normalisé a un RMS plus bas
+RMS_MIN_MIC        = 0.015      # seuil micro : plus strict contre l'écho ambiant
+MAX_SEG_MS         = 4000       # flush forcé : un segment au moins toutes les 4 s
 
 
 # ----------------------------- DÉCOUVERTE PÉRIPHÉRIQUES -----------------------
@@ -125,7 +127,8 @@ def rms(audio):
 
 def garder_si_audible(audio, seuil=RMS_MIN):
     """Filtre anti-hallucination : renvoie `audio` si son RMS >= seuil,
-    sinon None (quasi-silence à ne pas envoyer à la transcription)."""
+    sinon None (quasi-silence à ne pas envoyer à la transcription).
+    Passer seuil=RMS_MIN_LOOPBACK pour le patient, RMS_MIN_MIC pour le médecin."""
     return audio if rms(audio) >= seuil else None
 
 

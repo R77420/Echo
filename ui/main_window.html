@@ -29,7 +29,7 @@
   </div>
 
   <!-- Profil médecin -->
-  <div class="sidebar-doc">
+  <div class="sidebar-doc" id="sidebar-doc-btn" title="Voir mon profil">
     <div class="doc-avatar" id="doctor-initials">··</div>
     <div class="doc-meta">
       <div class="doc-name" id="doctor-name">Chargement…</div>
@@ -60,6 +60,71 @@
 
 <!-- ── Zone de contenu ─────────────────────────────── -->
 <main class="content" id="content">
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : AUTH — CONNEXION / INSCRIPTION
+       ═══════════════════════════════════════════════ -->
+  <div data-view="auth" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="auth-wrap">
+      <div class="auth-logo">Écho</div>
+      <div class="auth-sub">Votre assistant de transcription médicale</div>
+      <div class="auth-box">
+        <div class="auth-tabs">
+          <button class="auth-tab active" id="tab-signup" type="button">Créer un compte</button>
+          <button class="auth-tab" id="tab-login" type="button">Se connecter</button>
+        </div>
+        <!-- Formulaire inscription -->
+        <div id="pane-signup" class="auth-form">
+          <div class="field">
+            <label class="field-label" for="auth-name">Nom <span class="field-required">*</span></label>
+            <input type="text" id="auth-name" placeholder="Dr Dupont" autocomplete="name">
+          </div>
+          <div class="field">
+            <label class="field-label" for="auth-email">Email <span class="field-required">*</span></label>
+            <input type="text" id="auth-email" placeholder="dupont@clinique.fr" autocomplete="email">
+          </div>
+          <div class="field">
+            <label class="field-label" for="auth-password">Mot de passe <span class="field-required">*</span></label>
+            <input type="password" id="auth-password" placeholder="••••••••" autocomplete="new-password">
+          </div>
+          <div class="field">
+            <label class="field-label" for="auth-specialty">Spécialité</label>
+            <input type="text" id="auth-specialty" placeholder="Médecin généraliste" autocomplete="off">
+          </div>
+          <div id="signup-banner" class="hidden auth-banner"></div>
+          <button class="btn btn-primary" id="btn-signup" style="width:100%;padding:11px;">Créer mon compte</button>
+        </div>
+        <!-- Formulaire connexion -->
+        <div id="pane-login" class="auth-form hidden">
+          <div class="field">
+            <label class="field-label" for="login-email">Email</label>
+            <input type="text" id="login-email" placeholder="dupont@clinique.fr" autocomplete="email">
+          </div>
+          <div class="field">
+            <label class="field-label" for="login-password">Mot de passe</label>
+            <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+          </div>
+          <div id="login-banner" class="hidden auth-banner"></div>
+          <button class="btn btn-primary" id="btn-login" style="width:100%;padding:11px;">Se connecter</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : LICENCE EXPIRÉE (bloquante)
+       ═══════════════════════════════════════════════ -->
+  <div data-view="expired" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="expired-wrap">
+      <div class="expired-icon">🔒</div>
+      <div class="expired-title">Votre accès à Écho a expiré</div>
+      <div class="expired-sub">Pour continuer à utiliser Écho, réglez votre abonnement mensuel.</div>
+      <div class="expired-actions">
+        <button class="btn btn-primary" id="btn-regler" style="padding:12px;">Régler mon abonnement</button>
+        <button class="btn btn-secondary" id="btn-support" style="padding:10px;">Contacter le support</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══════════════════════════════════════════════
        VUE : ONBOARDING — BIENVENUE
@@ -199,6 +264,13 @@
         <button class="btn btn-primary" id="dp-start">Démarrer la consultation</button>
         <button class="btn btn-secondary" id="dp-cancel">Annuler</button>
       </div>
+    </div>
+
+    <!-- Bandeau période d'essai (masqué par défaut) -->
+    <div id="trial-banner" class="trial-banner hidden">
+      <span class="trial-msg" id="trial-msg"></span>
+      <button class="trial-btn" id="trial-activate">Activer ma licence</button>
+      <button class="trial-close" id="trial-close" title="Fermer">✕</button>
     </div>
 
     <!-- Statistiques -->
@@ -380,6 +452,23 @@
   </div>
 </div>
 
+<!-- ── Panneau profil flottant ──────────────────────────────── -->
+<div id="profile-overlay" class="profile-overlay hidden"></div>
+<div id="profile-panel" class="profile-panel hidden">
+  <button class="profile-close-btn" id="pp-close">✕</button>
+  <div class="profile-head">
+    <div class="profile-avatar-lg" id="pp-avatar">··</div>
+    <div class="profile-name" id="pp-name"></div>
+    <div class="profile-email" id="pp-email"></div>
+    <div class="profile-specialty" id="pp-specialty"></div>
+    <span class="profile-badge active" id="pp-badge">✓ Licence active</span>
+  </div>
+  <div class="profile-actions">
+    <button class="btn btn-secondary" id="pp-btn-abonnement">Gérer mon abonnement</button>
+    <button class="btn btn-secondary" id="pp-btn-deconnecter" style="color:var(--danger);border-color:var(--danger)">Se déconnecter</button>
+  </div>
+</div>
+
 <script src="app.js"></script>
 <script>
 'use strict';
@@ -396,6 +485,15 @@ let currentConsult   = null;
 /*  Navigation SPA                                                     */
 /* ------------------------------------------------------------------ */
 
+// Vues accessibles sans licence
+const VUES_PUBLIQUES = new Set(['auth', 'expired']);
+
+function setNavAuth(connecte) {
+  document.querySelector('.sidebar-nav').classList.toggle('nav-disabled', !connecte);
+  const help = $('nav-help');
+  if (help) help.classList.toggle('nav-disabled', !connecte);
+}
+
 function navigate(viewName) {
   document.querySelectorAll('[data-view]').forEach(el => {
     el.classList.toggle('hidden', el.dataset.view !== viewName);
@@ -403,6 +501,8 @@ function navigate(viewName) {
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.nav === viewName);
   });
+  // Désactiver la nav sur les vues publiques (auth, expired)
+  setNavAuth(!VUES_PUBLIQUES.has(viewName));
   currentView = viewName;
 }
 
@@ -414,10 +514,21 @@ onReady(async () => {
   const state = await api('get_app_state');
   if (!state) return;
 
-  applyTheme(state.theme);   // restaure le thème depuis config.json
+  applyTheme(state.theme);
 
-  // Aucun téléchargement au premier lancement : Groq assure transcription ET
-  // résumé. (Le modèle Whisper de secours hors-ligne est récupéré à la demande.)
+  // 1. Pas de licence → écran auth (avant même l'onboarding)
+  if (!state.licence_ok) {
+    navigate('auth');
+    return;
+  }
+
+  // 2. Licence expirée → écran bloquant
+  if (state.licence_expired) {
+    navigate('expired');
+    return;
+  }
+
+  // 3. Onboarding pas encore fait
   if (!state.onboarding_done) {
     navigate('onboarding-welcome');
     return;
@@ -426,6 +537,115 @@ onReady(async () => {
   $('doctor-name').textContent = state.doctor_name || '';
   await loadHome();
   navigate('home');
+
+  // 4. Bandeau essai
+  if (state.en_essai) {
+    showTrialBanner(state.jours_restants);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Auth — Connexion / Inscription                                     */
+/* ------------------------------------------------------------------ */
+
+// Onglets
+['tab-signup','tab-login'].forEach(id => {
+  $(id).addEventListener('click', () => {
+    const isSignup = id === 'tab-signup';
+    $('tab-signup').classList.toggle('active', isSignup);
+    $('tab-login').classList.toggle('active', !isSignup);
+    $('pane-signup').classList.toggle('hidden', !isSignup);
+    $('pane-login').classList.toggle('hidden', isSignup);
+  });
+});
+
+function authBanner(id, msg, isErr) {
+  const el = $(id);
+  el.textContent = msg;
+  el.className = 'auth-banner ' + (isErr ? 'banner-err' : 'banner-ok');
+  el.classList.remove('hidden');
+}
+
+$('btn-signup').addEventListener('click', async () => {
+  const nom       = $('auth-name').value.trim();
+  const email     = $('auth-email').value.trim();
+  const password  = $('auth-password').value;
+  const specialty = $('auth-specialty').value.trim();
+  if (!nom || !email || !password) {
+    authBanner('signup-banner', 'Nom, email et mot de passe sont obligatoires.', true);
+    return;
+  }
+  $('btn-signup').disabled = true;
+  $('btn-signup').textContent = 'Création…';
+  const res = await window.pywebview.api.auth_inscription(nom, email, password, specialty);
+  $('btn-signup').disabled = false;
+  $('btn-signup').textContent = 'Créer mon compte';
+  if (!res || !res.ok) {
+    authBanner('signup-banner', (res && res.error) || 'Erreur réseau, réessayez.', true);
+    return;
+  }
+  // Succès → continuer vers onboarding
+  navigate('onboarding-welcome');
+});
+
+$('btn-login').addEventListener('click', async () => {
+  const email    = $('login-email').value.trim();
+  const password = $('login-password').value;
+  if (!email || !password) {
+    authBanner('login-banner', 'Email et mot de passe obligatoires.', true);
+    return;
+  }
+  $('btn-login').disabled = true;
+  $('btn-login').textContent = 'Connexion…';
+  const res = await window.pywebview.api.auth_connexion(email, password);
+  $('btn-login').disabled = false;
+  $('btn-login').textContent = 'Se connecter';
+  if (!res || !res.ok) {
+    authBanner('login-banner', (res && res.error) || 'Identifiants incorrects.', true);
+    return;
+  }
+  // Licence expirée renvoyée à la connexion
+  if (res.expired) { navigate('expired'); return; }
+  const state = await api('get_app_state');
+  if (state && !state.onboarding_done) { navigate('onboarding-welcome'); return; }
+  if (state) $('doctor-name').textContent = state.doctor_name || '';
+  await loadHome();
+  navigate('home');
+  if (res.en_essai) showTrialBanner(res.jours_restants);
+});
+
+/* ------------------------------------------------------------------ */
+/*  Bandeau essai                                                       */
+/* ------------------------------------------------------------------ */
+
+function showTrialBanner(jours) {
+  const banner = $('trial-banner');
+  const j = parseInt(jours) || 0;
+  $('trial-msg').textContent = `Période d'essai — J-${j} avant la fin`;
+  banner.className = 'trial-banner ' + (j <= 1 ? 'alert' : 'warn');
+  banner.classList.remove('hidden');
+}
+
+$('trial-activate').addEventListener('click', async () => {
+  console.log('Activer ma licence cliqué');
+  await window.pywebview.api.ouvrir_lien_paiement('installation');
+});
+
+$('trial-close').addEventListener('click', () => {
+  hide($('trial-banner'));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Vue "Licence expirée"                                              */
+/* ------------------------------------------------------------------ */
+
+$('btn-regler').addEventListener('click', async () => {
+  console.log('Régler abonnement cliqué');
+  await window.pywebview.api.ouvrir_lien_paiement('abonnement');
+});
+
+$('btn-support').addEventListener('click', () => {
+  api('ouvrir_mailto', 'support@echo-medical.fr');
 });
 
 /* ------------------------------------------------------------------ */
@@ -517,6 +737,13 @@ $('obs-done').addEventListener('click', async () => {
 document.querySelectorAll('.nav-item').forEach(el => {
   el.addEventListener('click', async () => {
     const nav = el.dataset.nav;
+    if (!nav) return;
+    // Guard : refuser l'accès si pas de licence valide
+    const state = await api('get_app_state');
+    if (!state || (!state.licence_ok && !state.en_essai)) {
+      navigate('auth');
+      return;
+    }
     if (nav === 'home') {
       await loadHome();
       navigate('home');
@@ -883,8 +1110,9 @@ async function loadSettings() {
   if (!s) return;
   $('set-doctor').value = s.doctor_name  || '';
   $('set-folder').value = s.save_folder  || '';
-  applyTheme(s.theme);
-  markThemeRadio(currentTheme());
+  // Sélectionne visuellement le bon bouton SANS rappeler applyTheme :
+  // le thème est déjà actif (appliqué au démarrage via onReady).
+  markThemeRadio(s.theme || 'light');
   populateSelect($('set-output'), s.outputs, s.selected_output);
   populateSelect($('set-mic'),    s.mics,    s.selected_mic);
   const gp = Math.round((s.gain_patient || 1.0) * 100);
@@ -1000,6 +1228,60 @@ $('detail-open-folder').addEventListener('click', async () => {
   if (currentConsult && currentConsult.file_path)
     await api('open_folder_os', currentConsult.file_path);
 });
+/* ------------------------------------------------------------------ */
+/*  Panneau profil sidebar                                             */
+/* ------------------------------------------------------------------ */
+
+$('sidebar-doc-btn').addEventListener('click', async () => {
+  const s = await api('get_app_state');
+  if (!s) return;
+  const cfg = await window.pywebview.api.get_profile_info();
+
+  // Avatar
+  const initials = (s.doctor_name || '?').split(/\s+/).map(w => w[0]).join('').slice(0,2).toUpperCase();
+  $('pp-avatar').textContent = initials;
+  $('pp-name').textContent   = s.doctor_name || '';
+  $('pp-email').textContent  = cfg.email || '';
+  $('pp-specialty').textContent = cfg.specialty || '';
+
+  // Badge statut
+  const badge = $('pp-badge');
+  if (s.licence_expired) {
+    badge.className = 'profile-badge expired'; badge.textContent = 'Licence expirée';
+  } else if (s.en_essai) {
+    badge.className = 'profile-badge trial'; badge.textContent = `Période d'essai — J-${s.jours_restants}`;
+  } else {
+    badge.className = 'profile-badge active'; badge.textContent = '✓ Licence active';
+  }
+
+  show($('profile-overlay'));
+  show($('profile-panel'));
+});
+
+function closeProfilePanel() {
+  hide($('profile-overlay'));
+  hide($('profile-panel'));
+}
+
+$('profile-overlay').addEventListener('click', closeProfilePanel);
+$('pp-close').addEventListener('click', closeProfilePanel);
+
+$('pp-btn-abonnement').addEventListener('click', async () => {
+  console.log('Gérer abonnement cliqué');
+  closeProfilePanel();
+  await window.pywebview.api.ouvrir_lien_paiement('abonnement');
+});
+
+$('pp-btn-deconnecter').addEventListener('click', async () => {
+  closeProfilePanel();
+  await window.pywebview.api.deconnecter();
+  // Réinitialiser l'identité sidebar avant de revenir à l'écran auth
+  $('doctor-name').textContent    = 'Chargement…';
+  $('doctor-initials').textContent = '··';
+  navigate('auth');
+});
+
 </script>
+
 </body>
 </html>

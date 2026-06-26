@@ -99,15 +99,22 @@ def _frame():
 
 
 def test_vad_segment_court():
-    """Un tour de parole trop court (< MIN_SPEECH_MS) est ignoré (aucun segment)."""
-    seg = audio.VADSegmenter()
+    """Un tour de parole trop court (< MIN_SPEECH_MS) est ignoré (aucun segment).
+
+    On instancie le segmenteur avec des paramètres explicites garantissant que
+    speech_frames + silence_limit < min_speech_frames, indépendamment des
+    constantes globales (qui peuvent évoluer).
+    """
+    # min_speech_frames=20 > silence_frames_limit(7)+speech_frames(1) → rejet assuré
+    seg = audio.VADSegmenter(
+        silence_ms=7 * audio.FRAME_MS,   # 7 frames de silence
+        min_speech_ms=20 * audio.FRAME_MS,  # 20 frames minimum requis
+    )
     f = _frame()
-    # Quelques frames de "parole" volontairement insuffisantes.
-    courtes = max(1, seg.min_speech_frames - seg.silence_frames_limit - 2)
     emis = []
-    for _ in range(courtes):
-        emis.append(seg.ajouter(True, f))
-    # Silence prolongé → fin de tour, mais le buffer total reste < min_speech_frames.
+    # 1 seule frame de parole
+    emis.append(seg.ajouter(True, f))
+    # Silence prolongé → fin de tour, buffer total = 1 + 7 = 8 < 20 → rejeté
     for _ in range(seg.silence_frames_limit):
         emis.append(seg.ajouter(False, f))
     assert all(s is None for s in emis)          # rien n'est émis
