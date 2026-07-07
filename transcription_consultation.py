@@ -87,7 +87,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "1.6.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "1.7.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -506,6 +506,7 @@ def chemin_modele():
 # le compte-rendu reste sauvegardé avec la transcription complète.
 
 from resume import groq_summarize, ENTETE_RESUME
+import correction
 
 
 # ----------------------------- PARAMÈTRES WHISPER ----------------------------
@@ -516,22 +517,25 @@ from resume import groq_summarize, ENTETE_RESUME
 # prescrits en France (sans doublons marque/générique), symptômes et examens
 # courants, termes de consultation. (Pas de médicaments rares ni de spécialités.)
 WHISPER_INITIAL_PROMPT = (
-    "Consultation médicale en français, médecin généraliste. "
-    # Médicaments les plus prescrits
-    "Médicaments : Doliprane, paracétamol, Efferalgan, ibuprofène, Advil, "
-    "amoxicilline, Augmentin, Oméprazole, Tramadol, Cortancyl, Ventoline, "
-    "Symbicort, Levothyrox, metformine, Jardiance, amlodipine, bisoprolol, "
-    "ramipril, furosémide, atorvastatine, Eliquis, Plavix, Lexomil, Zolpidem, "
-    "sertraline. "
-    # Examens et actes clés
-    "Examens : NFS, glycémie, HbA1c, TSH, CRP, créatinine, ECG, échographie, "
-    "scanner, IRM, ECBU, saturation, SpO2, tension artérielle. "
+    # Phrase d'ancrage prioritaire — agit comme dictionnaire pour Whisper.
+    # Répéter les noms en tête du prompt maximise leur reconnaissance.
+    "Consultation médicale française. Termes exacts : "
+    "Doliprane, Amoxicilline, Ibuprofène, Oméprazole, "
+    "Cortancyl, Ventoline, Levothyrox, Metformine, Bisoprolol, Ramipril. "
+    # Paires marque/générique : le contexte entre parenthèses ancre le mot.
+    "Médicaments : Doliprane (paracétamol), Amoxicilline (Clamoxyl), "
+    "Ibuprofène (Advil, Nurofen), Oméprazole (Mopral), Metformine (Glucophage), "
+    "Tramadol, Cortancyl, Ventoline, Levothyrox, bisoprolol, ramipril, "
+    "atorvastatine, Zolpidem, sertraline. "
+    # Examens courants
+    "Examens : NFS, glycémie, HbA1c, TSH, CRP, créatinine, "
+    "ECG, échographie, scanner, IRM, ECBU, SpO2, tension artérielle. "
     # Termes de consultation
-    "Termes : ordonnance, renouvellement, arrêt de travail, antécédents, "
-    "allergie, posologie, traitement en cours, Sécurité Sociale, mutuelle. "
-    # Symptômes courants
-    "Symptômes : fièvre, toux, céphalées, dyspnée, nausées, vertiges, fatigue, "
-    "palpitations, douleurs abdominales."
+    "Termes : ordonnance, renouvellement, arrêt de travail, "
+    "antécédents, allergie, posologie, mutuelle. "
+    # Symptômes
+    "Symptômes : fièvre, toux, céphalées, dyspnée, nausées, vertiges, "
+    "fatigue, palpitations."
 )
 
 # Limite de prompt imposée par l'API Groq (whisper-large-v3) : 896 « caractères »
@@ -735,6 +739,34 @@ def _transcrire_cloud(client, audio):
     return response.text
 
 
+# File des segments à corriger par le LLM (id, texte, contexte).
+# Le worker tourne en parallèle : le texte brut est affiché immédiatement,
+# la version corrigée remplace le tour à l'écran quand elle arrive (~1 s).
+_correction_queue = queue.Queue()
+_seg_id_lock = threading.Lock()
+_seg_id_next = 0
+
+
+def _nouveau_seg_id():
+    global _seg_id_next
+    with _seg_id_lock:
+        _seg_id_next += 1
+        return _seg_id_next
+
+
+def _correction_worker():
+    """Consomme _correction_queue et pousse les corrections vers l'affichage.
+    S'arrête avec stop_event (fin de consultation)."""
+    while not stop_event.is_set():
+        try:
+            seg_id, texte, ctx = _correction_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        corrige = correction.corriger_segment(texte, ctx)
+        if corrige and corrige != texte:
+            display_queue.put(("CORRECTION", corrige, seg_id))
+
+
 def transcrire():
     """Worker unique : consomme les segments et les transcrit.
 
@@ -745,6 +777,13 @@ def transcrire():
         est requis (à la demande uniquement, 1,6 Go).
     Le modèle local n'est chargé que lorsqu'il devient nécessaire (paresseux)."""
     _reset_contexte()          # nouveau contexte glissant pour cette consultation
+    # Purger les corrections en attente d'une consultation précédente.
+    while True:
+        try:
+            _correction_queue.get_nowait()
+        except queue.Empty:
+            break
+    threading.Thread(target=_correction_worker, daemon=True).start()
     cloud_client    = _init_cloud_client()
     cloud_on        = cloud_client is not None
     local_model     = None     # chargé paresseusement au 1er repli
@@ -798,8 +837,14 @@ def transcrire():
         # Filtre anti-hallucination de sous-titrage : ni affiché, ni sauvegardé,
         # ni injecté dans le contexte du prochain segment.
         if texte and not est_hallucination_generique(texte):
+            with _contexte_lock:
+                ctx_correction = _dernier_contexte
             _maj_contexte(texte)   # alimente le prompt du prochain segment
-            display_queue.put((label, texte))
+            # Affichage immédiat du texte brut ; la correction LLM arrive
+            # ensuite via _correction_worker et remplace le tour à l'écran.
+            seg_id = _nouveau_seg_id()
+            display_queue.put((label, texte, seg_id))
+            _correction_queue.put((seg_id, texte, ctx_correction))
 
 
 # ----------------------------- EXPORT DOCUMENT (delegue a storage.py) -------
@@ -872,9 +917,12 @@ class Overlay:
     def _vider_file(self):
         while True:
             try:
-                label, texte = display_queue.get_nowait()
+                item = display_queue.get_nowait()
             except queue.Empty:
                 break
+            label, texte = item[0], item[1]
+            if label == "CORRECTION":
+                continue   # UI tk legacy : pas de remplacement in-place
             self.text.configure(state="normal")
             if label in ("INFO", "AVIS", "ERREUR"):
                 self.text.insert("end", "- " + texte + "\n", label)
@@ -1598,6 +1646,7 @@ class Api:
         self._overlay_win = None  # overlay transcript
         self._lock        = threading.Lock()
         self._entries     = []    # (timestamp, label, texte)
+        self._seg_index   = {}    # seg_id → index dans _entries (corrections LLM)
         self._infos       = None
         self._resume      = None
         self._annexes     = []
@@ -1618,14 +1667,27 @@ class Api:
         items = []
         while True:
             try:
-                label, texte = display_queue.get_nowait()
+                item = display_queue.get_nowait()
             except queue.Empty:
                 break
+            label, texte = item[0], item[1]
+            seg_id = item[2] if len(item) > 2 else None
             ts = datetime.datetime.now().strftime("%H:%M:%S")
             if label in ("Medecin", "Patient"):
                 with self._lock:
+                    if seg_id is not None:
+                        self._seg_index[seg_id] = len(self._entries)
                     self._entries.append((ts, label, texte))
-            items.append({"type": label, "texte": texte, "timestamp": ts})
+            elif label == "CORRECTION":
+                # Correction LLM différée : mettre à jour l'entrée stockée
+                # (docx + résumé) et transmettre au JS pour le DOM.
+                with self._lock:
+                    idx = self._seg_index.get(seg_id)
+                    if idx is not None and idx < len(self._entries):
+                        h, loc, _ = self._entries[idx]
+                        self._entries[idx] = (h, loc, texte)
+            items.append({"type": label, "texte": texte,
+                          "timestamp": ts, "seg_id": seg_id})
         return items
 
     def get_speaking_status(self):
@@ -1812,6 +1874,7 @@ class Api:
             "gain_patient":      cfg.get("gain_patient", 1.0),
             "gain_mic":          cfg.get("gain_mic", 1.0),
             "theme":             cfg.get("theme") or "light",
+            "version":           APP_VERSION,
         }
 
     def complete_onboarding(self, doctor_name, mic_name, output_name):
@@ -1877,13 +1940,11 @@ class Api:
         """Crée un lien de paiement Stripe via le backend et l'ouvre dans le navigateur."""
         cfg = charger_config()
         medecin_id = cfg.get("medecin_id", "")
-        print(f"[PAIEMENT] type={type_paiement} medecin_id={medecin_id!r}")
         res = _appel_api("creer-paiement", {
             "medecin_id": medecin_id,
             "type": type_paiement,
         })
         url = res.get("url") if res else None
-        print(f"[PAIEMENT] réponse={res} url={url!r}")
         if url:
             webbrowser.open(url)
             return {"ok": True}
@@ -2010,6 +2071,7 @@ class Api:
         stop_event.clear()
         with self._lock:
             self._entries.clear()
+            self._seg_index.clear()
         self._save_done  = False
         self._infos      = None
         self._resume     = None
@@ -2086,6 +2148,12 @@ class Api:
                 self._resume_status = "generating"
                 with self._lock:
                     entries = list(self._entries)
+                # Passe de correction LLM globale : le résumé ET le .docx
+                # sont générés depuis le transcript corrigé.
+                entries = correction.corriger_transcript_complet(entries)
+                with self._lock:
+                    if len(entries) == len(self._entries):
+                        self._entries[:] = entries
                 transcript = "\n".join(
                     "[%s] %s : %s" % (h, LOCUTEUR_FICHIER.get(loc, loc), t)
                     for h, loc, t in entries)

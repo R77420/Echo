@@ -340,21 +340,41 @@ function secFromTs(ts) {
 function appendEntry(item) {
   const type = item.type || 'INFO';
   if (type === 'Medecin' || type === 'Patient') {
-    addTurn(type, item.texte, item.timestamp);
+    addTurn(type, item.texte, item.timestamp, item.seg_id);
+  } else if (type === 'CORRECTION') {
+    applyCorrection(item.seg_id, item.texte);
   } else if (type === 'AVIS' || type === 'ERREUR') {
     addSystem(item.texte, type === 'ERREUR');
   }
   // INFO (« Transcription prête… ») : ignoré, l'état d'attente le couvre.
 }
 
-function addTurn(speaker, texte, ts) {
+/* Remplace le texte d'un segment déjà affiché par sa version corrigée
+   (correction LLM asynchrone, arrive ~1 s après le texte brut). */
+function applyCorrection(segId, texte) {
+  if (segId == null) return;
+  const span = document.querySelector('#transcript [data-seg="' + segId + '"]');
+  if (span) span.textContent = texte;
+}
+
+/* Chaque segment vit dans son propre <span data-seg="id"> pour permettre
+   le remplacement in-place par la correction LLM. */
+function segSpan(texte, segId) {
+  const s = document.createElement('span');
+  if (segId != null) s.dataset.seg = segId;
+  s.textContent = texte;
+  return s;
+}
+
+function addTurn(speaker, texte, ts, segId) {
   hideWaiting();
   const t = $('transcript');
   const sec = secFromTs(ts);
   if (_lastTurn && _lastTurn.speaker === speaker && (sec - _lastTurn.sec) < 30) {
     // Même locuteur, < 30 s → on prolonge le tour existant.
     const txtEl = _lastTurn.el.querySelector('.txt');
-    txtEl.textContent = (txtEl.textContent + ' ' + texte).trim();
+    txtEl.appendChild(document.createTextNode(' '));
+    txtEl.appendChild(segSpan(texte, segId));
     _lastTurn.sec = sec;
   } else {
     const div = document.createElement('div');
@@ -363,7 +383,7 @@ function addTurn(speaker, texte, ts) {
       '<div class="who"><span class="tag">' + (speaker === 'Medecin' ? 'Médecin' : 'Patient') +
         '</span><span class="ts">' + esc(hmFromTs(ts)) + '</span></div>' +
       '<div class="txt"></div>';
-    div.querySelector('.txt').textContent = texte;
+    div.querySelector('.txt').appendChild(segSpan(texte, segId));
     t.appendChild(div);
     _lastTurn = { el: div, speaker: speaker, sec: sec };
   }

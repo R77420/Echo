@@ -55,7 +55,7 @@
     <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4 1.8c0 1.7-2.5 2-2.5 3.2"/><path d="M12 17h.01"/></svg>
     <span>Aide &amp; contact</span>
   </div>
-  <div class="sidebar-footer">Écho v1.5</div>
+  <div class="sidebar-footer">Écho</div>
 </nav>
 
 <!-- ── Zone de contenu ─────────────────────────────── -->
@@ -480,6 +480,9 @@
 let currentView    = null;
 let allConsultations = [];
 let currentConsult   = null;
+// Cache de l'état licence (évite un appel API à chaque clic de nav).
+// Mis à jour à l'init, après connexion/inscription et à la déconnexion.
+let licenceValide  = false;
 
 /* ------------------------------------------------------------------ */
 /*  Navigation SPA                                                     */
@@ -494,7 +497,20 @@ function setNavAuth(connecte) {
   if (help) help.classList.toggle('nav-disabled', !connecte);
 }
 
+function resetAuthForm() {
+  ['auth-name','auth-email','auth-password','auth-specialty',
+   'login-email','login-password'].forEach(id => {
+    const el = $(id); if (el) el.value = '';
+  });
+  ['signup-banner','login-banner'].forEach(id => {
+    const el = $(id); if (el) { el.textContent = ''; el.classList.add('hidden'); }
+  });
+}
+
 function navigate(viewName) {
+  // Vider le formulaire auth quand on le quitte
+  if (currentView === 'auth' && viewName !== 'auth') resetAuthForm();
+
   document.querySelectorAll('[data-view]').forEach(el => {
     el.classList.toggle('hidden', el.dataset.view !== viewName);
   });
@@ -515,18 +531,25 @@ onReady(async () => {
   if (!state) return;
 
   applyTheme(state.theme);
+  // Version dynamique depuis Python
+  const vLabel = document.querySelector('.sidebar-footer');
+  if (vLabel && state.version) vLabel.textContent = 'Écho v' + state.version;
 
-  // 1. Pas de licence → écran auth (avant même l'onboarding)
+  // 1. Pas de licence → écran auth
   if (!state.licence_ok) {
+    licenceValide = false;
     navigate('auth');
     return;
   }
 
   // 2. Licence expirée → écran bloquant
   if (state.licence_expired) {
+    licenceValide = false;
     navigate('expired');
     return;
   }
+
+  licenceValide = true;
 
   // 3. Onboarding pas encore fait
   if (!state.onboarding_done) {
@@ -534,14 +557,12 @@ onReady(async () => {
     return;
   }
 
-  $('doctor-name').textContent = state.doctor_name || '';
+  setDoctorIdentity(state.doctor_name || '');
   await loadHome();
   navigate('home');
 
   // 4. Bandeau essai
-  if (state.en_essai) {
-    showTrialBanner(state.jours_restants);
-  }
+  if (state.en_essai) showTrialBanner(state.jours_restants);
 });
 
 /* ------------------------------------------------------------------ */
@@ -577,15 +598,18 @@ $('btn-signup').addEventListener('click', async () => {
   }
   $('btn-signup').disabled = true;
   $('btn-signup').textContent = 'Création…';
-  const res = await window.pywebview.api.auth_inscription(nom, email, password, specialty);
+  const res = await api('auth_inscription', nom, email, password, specialty);
   $('btn-signup').disabled = false;
   $('btn-signup').textContent = 'Créer mon compte';
   if (!res || !res.ok) {
     authBanner('signup-banner', (res && res.error) || 'Erreur réseau, réessayez.', true);
     return;
   }
-  // Succès → continuer vers onboarding
+  licenceValide = true;
+  // Re-lire l'état pour avoir jours_restants à jour depuis config.json
+  const state = await api('get_app_state');
   navigate('onboarding-welcome');
+  if (state && state.en_essai) showTrialBanner(state.jours_restants);
 });
 
 $('btn-login').addEventListener('click', async () => {
@@ -597,21 +621,21 @@ $('btn-login').addEventListener('click', async () => {
   }
   $('btn-login').disabled = true;
   $('btn-login').textContent = 'Connexion…';
-  const res = await window.pywebview.api.auth_connexion(email, password);
+  const res = await api('auth_connexion', email, password);
   $('btn-login').disabled = false;
   $('btn-login').textContent = 'Se connecter';
   if (!res || !res.ok) {
     authBanner('login-banner', (res && res.error) || 'Identifiants incorrects.', true);
     return;
   }
-  // Licence expirée renvoyée à la connexion
-  if (res.expired) { navigate('expired'); return; }
+  if (res.expired) { licenceValide = false; navigate('expired'); return; }
+  licenceValide = true;
   const state = await api('get_app_state');
   if (state && !state.onboarding_done) { navigate('onboarding-welcome'); return; }
-  if (state) $('doctor-name').textContent = state.doctor_name || '';
+  if (state) setDoctorIdentity(state.doctor_name || '');
   await loadHome();
   navigate('home');
-  if (res.en_essai) showTrialBanner(res.jours_restants);
+  if (state && state.en_essai) showTrialBanner(state.jours_restants);
 });
 
 /* ------------------------------------------------------------------ */
@@ -627,8 +651,7 @@ function showTrialBanner(jours) {
 }
 
 $('trial-activate').addEventListener('click', async () => {
-  console.log('Activer ma licence cliqué');
-  await window.pywebview.api.ouvrir_lien_paiement('installation');
+  await api('ouvrir_lien_paiement', 'installation');
 });
 
 $('trial-close').addEventListener('click', () => {
@@ -640,8 +663,7 @@ $('trial-close').addEventListener('click', () => {
 /* ------------------------------------------------------------------ */
 
 $('btn-regler').addEventListener('click', async () => {
-  console.log('Régler abonnement cliqué');
-  await window.pywebview.api.ouvrir_lien_paiement('abonnement');
+  await api('ouvrir_lien_paiement', 'abonnement');
 });
 
 $('btn-support').addEventListener('click', () => {
@@ -738,9 +760,9 @@ document.querySelectorAll('.nav-item').forEach(el => {
   el.addEventListener('click', async () => {
     const nav = el.dataset.nav;
     if (!nav) return;
-    // Guard : refuser l'accès si pas de licence valide
-    const state = await api('get_app_state');
-    if (!state || (!state.licence_ok && !state.en_essai)) {
+    // Guard : refuser l'accès si pas de licence valide (cache local,
+    // mis à jour à l'init et aux transitions auth/déconnexion).
+    if (!licenceValide) {
       navigate('auth');
       return;
     }
@@ -1068,7 +1090,11 @@ $('delete-modal').addEventListener('click', e => {
 $('btn-new-consult').addEventListener('click', async () => {
   show($('device-picker'));
   $('btn-new-consult').disabled = true;
-  const devs = await api('get_devices');
+  let devs = await api('get_devices');
+  if (!devs || (!devs.outputs?.length && !devs.mics?.length)) {
+    await new Promise(r => setTimeout(r, 500));
+    devs = await api('get_devices');
+  }
   if (devs) {
     populateSelect($('dp-output'), devs.outputs, devs.selected_output);
     populateSelect($('dp-mic'),    devs.mics,    devs.selected_mic);
@@ -1081,9 +1107,12 @@ $('dp-cancel').addEventListener('click', () => {
 });
 
 $('dp-start').addEventListener('click', async () => {
-  $('dp-start').disabled = true;
+  const btn = $('dp-start');
+  btn.disabled = true;
+  btn.textContent = 'Démarrage…';
   clearBanner($('dp-banner'));
   const res = await api('begin_consultation', $('dp-mic').value, $('dp-output').value);
+  btn.textContent = 'Démarrer la consultation';
   if (res && res.ok) {
     hide($('device-picker'));
     $('btn-new-consult').disabled = false;
@@ -1092,7 +1121,7 @@ $('dp-start').addEventListener('click', async () => {
     b.className = 'banner banner-err';
     b.textContent = (res && res.error) || 'Impossible de démarrer la consultation.';
     show(b);
-    $('dp-start').disabled = false;
+    btn.disabled = false;
   }
 });
 
@@ -1235,7 +1264,7 @@ $('detail-open-folder').addEventListener('click', async () => {
 $('sidebar-doc-btn').addEventListener('click', async () => {
   const s = await api('get_app_state');
   if (!s) return;
-  const cfg = await window.pywebview.api.get_profile_info();
+  const cfg = (await api('get_profile_info')) || {};
 
   // Avatar
   const initials = (s.doctor_name || '?').split(/\s+/).map(w => w[0]).join('').slice(0,2).toUpperCase();
@@ -1267,14 +1296,14 @@ $('profile-overlay').addEventListener('click', closeProfilePanel);
 $('pp-close').addEventListener('click', closeProfilePanel);
 
 $('pp-btn-abonnement').addEventListener('click', async () => {
-  console.log('Gérer abonnement cliqué');
   closeProfilePanel();
-  await window.pywebview.api.ouvrir_lien_paiement('abonnement');
+  await api('ouvrir_lien_paiement', 'abonnement');
 });
 
 $('pp-btn-deconnecter').addEventListener('click', async () => {
   closeProfilePanel();
-  await window.pywebview.api.deconnecter();
+  await api('deconnecter');
+  licenceValide = false;
   // Réinitialiser l'identité sidebar avant de revenir à l'écran auth
   $('doctor-name').textContent    = 'Chargement…';
   $('doctor-initials').textContent = '··';

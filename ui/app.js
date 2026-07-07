@@ -41,7 +41,6 @@ function startPolling(onUpdates, ms = 200) {
   (async function loop() {
     const items = await api('get_updates');
     if (Array.isArray(items) && items.length > 0) {
-      console.log('[poll]', items.length, 'update(s)', items);
       onUpdates(items);
     }
     _pollTimer = setTimeout(loop, ms);

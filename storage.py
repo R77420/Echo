@@ -345,7 +345,7 @@ def ecrire_docx(chemin, infos, now, resume, entries, annexes=None):
     doc.add_page_break()
 
     # 6. Section TRANSCRIPTION INTÉGRALE.
-    h1_tr = doc.add_heading("Transcription intégrale", level=1)
+    h1_tr = doc.add_heading("Transcription intégrale (annexe)", level=1)
     _set_interligne(h1_tr, 1.2)
     h1_tr.runs[0].font.color.rgb = _rgb(_GRIS_TITRE)
 
