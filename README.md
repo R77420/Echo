@@ -6,7 +6,7 @@
 
 Transcription en temps réel · Correction médicale par IA · Compte-rendu structuré
 
-[Site web](https://echo-fr-transcrption.lovable.app/) · [Dernière version](https://github.com/R77420/Echo/releases/latest)
+[Site web](https://echo-site-web.vercel.app/) · [Dernière version](https://github.com/R77420/Echo/releases/latest)
 
 </div>
 
