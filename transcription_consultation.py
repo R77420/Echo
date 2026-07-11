@@ -87,7 +87,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "1.7.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "1.8.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -173,6 +173,10 @@ def sauver_config(cfg):
 
 def chemin_consultations():
     return os.path.join(dossier_config(), "consultations.json")
+
+
+def chemin_patients():
+    return os.path.join(dossier_config(), "patients.json")
 
 
 # L'historique (consultations.json) et la génération .docx sont gérés par le
@@ -1768,6 +1772,7 @@ class Api:
         for t in threads:
             t.start()
 
+        self._threads = threads   # mémorisés pour attendre leur fin au restart
         self._started = True
         result = {"ok": True, "loopback": loopback.name}
         if micro is None:
@@ -2067,6 +2072,21 @@ class Api:
 
     def begin_consultation(self, mic_name, output_name):
         """Lance la consultation depuis la fenêtre principale."""
+        # Attendre la fin des threads de la consultation précédente avant de
+        # ré-armer stop_event (sinon ils survivraient au clear et doubleraient
+        # la capture/transcription).
+        old_threads = getattr(self, "_threads", [])
+        if any(t.is_alive() for t in old_threads):
+            stop_event.set()
+            for t in old_threads:
+                t.join(timeout=1.5)
+        # Purger les segments/affichages restants de la consultation précédente.
+        for q in (segment_queue, display_queue):
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
         # Réinitialise l'état pour une nouvelle consultation.
         stop_event.clear()
         with self._lock:
@@ -2107,6 +2127,12 @@ class Api:
             self._main_win.restore()
             self._main_win.evaluate_js("onConsultationEnded()")
         stop_event.set()
+        # Autoriser une nouvelle consultation (les threads de capture et de
+        # transcription s'arrêtent via stop_event ; start() en relance de neufs).
+        self._started = False
+        # Présélection patient jamais consommée (consultation non sauvegardée) :
+        # ne pas polluer la consultation suivante.
+        self._patient_presel = None
         return {"ok": True}
 
     def request_quit(self):
@@ -2270,6 +2296,44 @@ class Api:
     def get_consultations(self):
         return storage.charger_consultations(chemin_consultations())
 
+    def get_patients(self):
+        """Patients distincts : consultations + patients créés manuellement."""
+        consultations = storage.charger_consultations(chemin_consultations())
+        manuels = storage.charger_patients_manuels(chemin_patients())
+        return storage.extraire_patients(consultations, manuels)
+
+    def ajouter_patient(self, nom, prenom="", ddn=""):
+        """Crée un patient à la main (vue Patients). Refuse les doublons."""
+        try:
+            ok = storage.ajouter_patient_manuel(chemin_patients(), nom, prenom, ddn)
+            if not ok:
+                return {"ok": False,
+                        "error": "Ce patient existe déjà (ou le nom est vide)."}
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ---- Patient présélectionné (consultation lancée depuis une fiche) -----
+
+    def set_patient_preselectionne(self, nom, prenom="", ddn=""):
+        """Mémorise le patient pour pré-remplir le formulaire de l'overlay."""
+        self._patient_presel = {"nom": nom or "", "prenom": prenom or "",
+                                "ddn": ddn or ""}
+        return {"ok": True}
+
+    def get_patient_preselectionne(self):
+        """Consommé une seule fois par l'overlay à l'ouverture du formulaire."""
+        p = getattr(self, "_patient_presel", None)
+        self._patient_presel = None
+        return p or {}
+
+    def suggerer_patients(self, query):
+        """Autocomplétion du champ Nom (max 5 patients, préfixe nom/prénom)."""
+        if not query or len(query.strip()) < 2:
+            return []
+        consultations = storage.charger_consultations(chemin_consultations())
+        return storage.rechercher_patients(consultations, query)
+
     def get_stats(self):
         """Statistiques de l'accueil calculées depuis consultations.json :
         nb ce mois, nb cette semaine, patients distincts, durée moyenne (min)."""
@@ -2281,7 +2345,6 @@ class Api:
             hour=0, minute=0, second=0, microsecond=0)
 
         mois = semaine = 0
-        noms = set()
         durees = []
         for c in consultations:
             if not isinstance(c, dict):
@@ -2295,16 +2358,16 @@ class Api:
                     mois += 1
                 if d >= debut_sem:
                     semaine += 1
-            nom = ((c.get("patient") or {}).get("nom") or "").strip().lower()
-            if nom:
-                noms.add(nom)
             dm = c.get("duration_min")
             if isinstance(dm, (int, float)) and dm > 0:
                 durees.append(dm)
 
         duree_moy = round(sum(durees) / len(durees)) if durees else 0
+        # Patients distincts : même regroupement que la vue Patients
+        # (clé nom+prénom normalisés — cf. storage.extraire_patients).
+        nb_patients = len(storage.extraire_patients(consultations))
         return {"mois": mois, "semaine": semaine,
-                "patients": len(noms), "duree_moy": duree_moy}
+                "patients": nb_patients, "duree_moy": duree_moy}
 
     def delete_consultation(self, cid):
         """Retire l'entrée d'id `cid` de consultations.json.

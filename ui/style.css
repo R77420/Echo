@@ -742,7 +742,8 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   color: var(--txt-secondary);
   pointer-events: none;
 }
-#consult-search {
+#consult-search,
+#patient-search {
   padding-left: 38px;
   padding-right: 36px;
 }
@@ -767,6 +768,22 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   transition: background var(--t), color var(--t);
 }
 .search-clear:hover { background: var(--bg-hover, rgba(0,0,0,0.05)); color: var(--txt-primary); }
+
+/* Combobox spécialité (formulaire d'inscription) */
+.combo-wrap { position: relative; }
+.combo-list {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-sm); overflow: hidden auto; max-height: 240px;
+  box-shadow: var(--shadow-card, 0 8px 24px rgba(0,0,0,0.18));
+}
+[data-theme="dark"] .combo-list { background: #1a2e28; }
+.combo-item {
+  padding: 9px 12px; font-size: 13.5px; color: var(--txt-primary);
+  cursor: pointer;
+}
+.combo-item:hover, .combo-item.sel { background: var(--accent-lt); color: var(--accent); }
+
 .search-count {
   font-size: 12px;
   color: var(--txt-secondary);
@@ -1435,6 +1452,22 @@ input[type="range"] {
 }
 .m-input:focus { border-color: var(--border-focus); }
 .m-err { font-size: 11.5px; color: var(--color-err); }
+
+/* Autocomplétion patient (champ Nom du formulaire de fin de consultation) */
+.ac-wrap { position: relative; }
+.ac-list {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: 9px; overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.ac-item {
+  padding: 9px 12px; font-size: 13px; color: var(--txt-main);
+  cursor: pointer; display: flex; flex-direction: column; gap: 1px;
+}
+.ac-item .ac-sub { font-size: 11.5px; color: var(--txt-dim); }
+.ac-item:hover, .ac-item.sel { background: rgba(62,207,142,0.14); }
+
 
 /* Resume textarea */
 #resume-text {

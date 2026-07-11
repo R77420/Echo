@@ -252,3 +252,161 @@ def test_retry_echoue_apres_3_tentatives(tmp_path, monkeypatch):
 
     with pytest.raises(PermissionError):
         storage.supprimer_consultation(chemin, "a1")
+
+
+# --------------------------------------------------------------------------- #
+#  Patients : regroupement et recherche
+# --------------------------------------------------------------------------- #
+
+def _consult(cid, nom, prenom="", ddn="", date="2026-06-13T09:00:00"):
+    return {
+        "id": cid, "date": date,
+        "patient": {"nom": nom, "prenom": prenom, "naissance": ddn,
+                    "motif": ""},
+        "summary": "", "file_path": "", "duration_min": 10,
+    }
+
+
+def test_extraire_patients_regroupe():
+    consultations = [
+        _consult("c1", "MARTIN", "Pierre", date="2026-06-01T09:00:00"),
+        _consult("c2", "MARTIN", "Pierre", date="2026-06-10T09:00:00"),
+        _consult("c3", "MARTIN", "Pierre", date="2026-06-20T09:00:00"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert len(patients) == 1
+    p = patients[0]
+    assert p["nb_consultations"] == 3
+    assert sorted(p["consultation_ids"]) == ["c1", "c2", "c3"]
+    assert p["derniere_consultation"] == "2026-06-20T09:00:00"
+
+
+def test_patients_homonymes_distincts():
+    consultations = [
+        _consult("c1", "MARTIN", "Pierre"),
+        _consult("c2", "MARTIN", "Sophie"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert len(patients) == 2
+
+
+def test_meme_nom_sans_prenom():
+    # Deux consultations "martin" sans prénom ni ddn → même clé, regroupées.
+    consultations = [
+        _consult("c1", "martin"),
+        _consult("c2", "Martin"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert len(patients) == 1
+    assert patients[0]["nb_consultations"] == 2
+
+
+def test_regroupement_nom_seul():
+    consultations = [
+        _consult("c1", "martin", date="2026-06-01T09:00:00"),
+        _consult("c2", "MARTIN", date="2026-06-02T09:00:00"),
+        _consult("c3", "Martin", date="2026-06-03T09:00:00"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert len(patients) == 1
+    assert patients[0]["nb_consultations"] == 3
+
+
+def test_nom_seul_et_nom_prenom_distincts():
+    # "MARTIN" sans prénom et "MARTIN Sophie" → 2 entrées distinctes.
+    consultations = [
+        _consult("c1", "MARTIN"),
+        _consult("c2", "MARTIN", "Sophie"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert len(patients) == 2
+
+
+def test_tri_derniere_consultation():
+    consultations = [
+        _consult("c1", "ANCIEN", "A", date="2026-01-01T09:00:00"),
+        _consult("c2", "RECENT", "B", date="2026-06-01T09:00:00"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert patients[0]["nom"] == "RECENT"
+
+
+def test_ddn_conservee_pour_affichage():
+    # La ddn n'entre pas dans la clé mais est conservée si connue.
+    consultations = [
+        _consult("c1", "MARTIN", "Pierre"),
+        _consult("c2", "MARTIN", "Pierre", ddn="12/03/1980"),
+    ]
+    patients = storage.extraire_patients(consultations)
+    assert len(patients) == 1
+    assert patients[0]["ddn"] == "12/03/1980"
+
+
+def test_recherche_floue():
+    consultations = [
+        _consult("c1", "Martin", "Pierre"),
+        _consult("c2", "Hélène", "Dupont"),
+        _consult("c3", "Durand", "Hélène"),
+    ]
+    # Début de nom, insensible à la casse.
+    res = storage.rechercher_patients(consultations, "mar")
+    assert len(res) == 1 and res[0]["nom"] == "Martin"
+    # Insensible aux accents : "héléne" trouve "Hélène" (nom ou prénom).
+    res = storage.rechercher_patients(consultations, "héléne")
+    noms = {(p["nom"], p["prenom"]) for p in res}
+    assert ("Hélène", "Dupont") in noms
+    assert ("Durand", "Hélène") in noms
+    # Query vide → rien.
+    assert storage.rechercher_patients(consultations, "") == []
+
+
+def test_recherche_max_5():
+    consultations = [
+        _consult(f"c{i}", f"Martin{i}", "X") for i in range(8)
+    ]
+    assert len(storage.rechercher_patients(consultations, "mar")) == 5
+
+
+def test_patient_manuel_sans_consultation(tmp_path):
+    chemin = os.path.join(tmp_path, "patients.json")
+    assert storage.ajouter_patient_manuel(chemin, "NOUVEAU", "Paul", "01/01/1990")
+    # Doublon (même clé, casse/accents différents) refusé.
+    assert not storage.ajouter_patient_manuel(chemin, "nouveau", "PAUL")
+    # Nom vide refusé.
+    assert not storage.ajouter_patient_manuel(chemin, "  ")
+
+    manuels = storage.charger_patients_manuels(chemin)
+    patients = storage.extraire_patients([], manuels)
+    assert len(patients) == 1
+    p = patients[0]
+    assert p["nom"] == "NOUVEAU" and p["prenom"] == "Paul"
+    assert p["ddn"] == "01/01/1990"
+    assert p["nb_consultations"] == 0
+    assert p["consultation_ids"] == []
+
+
+def test_fusion_patient_manuel_et_consultations(tmp_path):
+    chemin = os.path.join(tmp_path, "patients.json")
+    storage.ajouter_patient_manuel(chemin, "Dupont", "Marie", "12/03/1980")
+    manuels = storage.charger_patients_manuels(chemin)
+    consultations = [
+        _consult("c1", "DUPONT", "Marie", date="2026-07-01T09:00:00"),
+        _consult("c2", "MARTIN", "Jean",  date="2026-07-02T09:00:00"),
+    ]
+    patients = storage.extraire_patients(consultations, manuels)
+    # Une seule entrée pour Dupont Marie (fusion manuel + consultation).
+    assert len(patients) == 2
+    marie = next(p for p in patients if _normalise_test(p["nom"]) == "dupont")
+    assert marie["nb_consultations"] == 1
+    assert marie["consultation_ids"] == ["c1"]
+    # La ddn saisie à la création manuelle est conservée.
+    assert marie["ddn"] == "12/03/1980"
+    # Patients avec consultation d'abord (tri par date), manuel seul en fin.
+    storage.ajouter_patient_manuel(chemin, "SANSRDV", "Zoe")
+    patients = storage.extraire_patients(
+        consultations, storage.charger_patients_manuels(chemin))
+    assert patients[-1]["nom"] == "SANSRDV"
+
+
+def _normalise_test(s):
+    return storage._normaliser(s)

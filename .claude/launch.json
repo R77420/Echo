@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "echo-ui",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["-m", "http.server", "8123", "--directory", "ui"],
+      "port": 8123
+    }
+  ]
+}

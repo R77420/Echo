@@ -14,6 +14,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 
 # Libellé accentué écrit dans le fichier (l'interne reste sans accent).
 LOCUTEUR_FICHIER = {"Medecin": "Médecin", "Patient": "Patient"}
@@ -129,6 +130,126 @@ def maj_consultation_resume(chemin, cid, resume):
             if attempt < 2:
                 time.sleep(0.15)
     raise derniere_exc
+
+
+# ============================ PATIENTS ======================================
+
+def _normaliser(s):
+    """Normalise pour comparaison : minuscules, sans accents, espaces réduits."""
+    s = unicodedata.normalize("NFKD", (s or "").strip().lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", s)
+
+
+def charger_patients_manuels(chemin):
+    """Patients créés manuellement (patients.json). [] si absent/corrompu."""
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def ajouter_patient_manuel(chemin, nom, prenom="", ddn=""):
+    """Ajoute un patient créé à la main dans patients.json.
+    Ignore les doublons (même clé nom+prénom normalisés qu'extraire_patients).
+    Renvoie True si ajouté, False si doublon ou nom vide."""
+    nom = (nom or "").strip()
+    if not nom:
+        return False
+    cle = (_normaliser(nom), _normaliser(prenom))
+    patients = charger_patients_manuels(chemin)
+    for p in patients:
+        if (_normaliser(p.get("nom")), _normaliser(p.get("prenom"))) == cle:
+            return False
+    patients.append({"nom": nom, "prenom": (prenom or "").strip(),
+                     "ddn": (ddn or "").strip()})
+    os.makedirs(os.path.dirname(chemin), exist_ok=True)
+    with open(chemin, "w", encoding="utf-8") as f:
+        json.dump(patients, f, ensure_ascii=False, indent=2)
+    return True
+
+
+def extraire_patients(consultations, patients_manuels=None):
+    """Regroupe les consultations par patient distinct.
+
+    Clé d'identité : (nom normalisé, prénom normalisé). La ddn est ignorée
+    pour la clé (trop rarement saisie) mais conservée pour l'affichage.
+    Prénom vide → regroupement par nom seul ; « DUPONT » (sans prénom) et
+    « DUPONT Marie » restent deux entrées distinctes — on ne fusionne jamais
+    par nom seul quand un prénom existe (sécurité médicale).
+
+    `patients_manuels` (optionnel) : patients créés à la main (patients.json),
+    fusionnés sur la même clé — un patient manuel qui a ensuite des
+    consultations n'apparaît qu'une fois ; sans consultation, il apparaît
+    avec nb_consultations=0.
+
+    Retourne : [{nom, prenom, ddn, nb_consultations, derniere_consultation,
+                 consultation_ids}], dernière consultation récente en premier
+    (les patients manuels sans consultation en fin de liste).
+    """
+    groupes = {}
+    for p in (patients_manuels or []):
+        nom = (p.get("nom") or "").strip()
+        if not nom:
+            continue
+        prenom = (p.get("prenom") or "").strip()
+        cle = (_normaliser(nom), _normaliser(prenom))
+        groupes.setdefault(cle, {
+            "nom": nom, "prenom": prenom,
+            "ddn": (p.get("ddn") or "").strip(),
+            "nb_consultations": 0,
+            "derniere_consultation": "",
+            "consultation_ids": [],
+        })
+    for c in consultations:
+        if not isinstance(c, dict):
+            continue
+        p = c.get("patient") or {}
+        nom = (p.get("nom") or "").strip()
+        if not nom:
+            continue
+        prenom = (p.get("prenom") or "").strip()
+        cle = (_normaliser(nom), _normaliser(prenom))
+        g = groupes.get(cle)
+        if g is None:
+            g = groupes[cle] = {
+                "nom": nom, "prenom": prenom, "ddn": "",
+                "nb_consultations": 0,
+                "derniere_consultation": "",
+                "consultation_ids": [],
+            }
+        g["nb_consultations"] += 1
+        if c.get("id"):
+            g["consultation_ids"].append(c["id"])
+        date = c.get("date") or ""
+        if date > g["derniere_consultation"]:
+            g["derniere_consultation"] = date
+            # Les libellés affichés suivent la consultation la plus récente.
+            g["nom"], g["prenom"] = nom, prenom
+        ddn = (p.get("naissance") or "").strip()
+        if ddn and not g["ddn"]:
+            g["ddn"] = ddn
+    return sorted(groupes.values(),
+                  key=lambda g: g["derniere_consultation"], reverse=True)
+
+
+def rechercher_patients(consultations, query):
+    """Recherche floue dans les patients distincts (autocomplétion).
+    Match sur début de nom OU de prénom, insensible casse/accents.
+    Retourne max 5 résultats (les plus récents en premier)."""
+    q = _normaliser(query)
+    if not q:
+        return []
+    resultats = []
+    for pat in extraire_patients(consultations):
+        if (_normaliser(pat["nom"]).startswith(q)
+                or _normaliser(pat["prenom"]).startswith(q)):
+            resultats.append(pat)
+            if len(resultats) >= 5:
+                break
+    return resultats
 
 
 # ============================ DOCUMENT WORD =================================

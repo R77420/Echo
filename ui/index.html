@@ -161,7 +161,10 @@
   <div class="modal-body">
     <div class="m-field">
       <label class="m-label">Nom <span style="color:var(--color-err)">*</span></label>
-      <input type="text" class="m-input" id="p-nom" placeholder="DUPONT" autocomplete="off">
+      <div class="ac-wrap">
+        <input type="text" class="m-input" id="p-nom" placeholder="DUPONT" autocomplete="off">
+        <div class="ac-list hidden" id="p-nom-ac"></div>
+      </div>
       <div class="m-err hidden" id="p-nom-err">Ce champ est obligatoire.</div>
     </div>
     <div class="m-field">
@@ -619,10 +622,19 @@ async function doClose() {
 /*  Flux de sauvegarde                                                 */
 /* ------------------------------------------------------------------ */
 
-function startSaveFlow() {
+async function startSaveFlow() {
   // Reset formulaire.
   ['p-nom','p-prenom','p-ddn','p-motif'].forEach(id => $(id).value = '');
   hide($('p-nom-err'));
+  acClose();
+  // Consultation lancée depuis une fiche patient → pré-remplir
+  // (consommé une seule fois côté Python ; modifiable librement).
+  const presel = await api('get_patient_preselectionne');
+  if (presel && presel.nom) {
+    $('p-nom').value    = presel.nom;
+    $('p-prenom').value = presel.prenom || '';
+    $('p-ddn').value    = presel.ddn || '';
+  }
   show($('modal-patient'));
   $('p-nom').focus();
 }
@@ -630,9 +642,85 @@ function startSaveFlow() {
 /* ── Formulaire patient ── */
 $('p-cancel').addEventListener('click', () => hide($('modal-patient')));
 $('p-submit').addEventListener('click', submitPatient);
-['p-nom','p-prenom','p-ddn','p-motif'].forEach(id => {
+/* p-nom est géré à part : Entrée y sélectionne d'abord une suggestion. */
+['p-prenom','p-ddn','p-motif'].forEach(id => {
   $(id).addEventListener('keydown', e => { if (e.key==='Enter') submitPatient(); });
 });
+
+/* ── Autocomplétion patient (champ Nom) ──
+   Gain de temps, jamais de friction : dès 2 lettres un dropdown propose
+   les patients connus (1er présélectionné) ; taper librement reste
+   possible exactement comme avant. */
+let _acItems = [];       // suggestions courantes
+let _acSel   = -1;       // index présélectionné
+let _acTimer = null;     // debounce 200 ms
+
+function acClose() {
+  hide($('p-nom-ac'));
+  _acItems = []; _acSel = -1;
+}
+
+function acPick(i) {
+  const p = _acItems[i];
+  if (!p) return;
+  $('p-nom').value    = p.nom || '';
+  $('p-prenom').value = p.prenom || '';
+  $('p-ddn').value    = p.ddn || '';
+  acClose();
+  hide($('p-nom-err'));
+}
+
+function acRender() {
+  const box = $('p-nom-ac');
+  box.innerHTML = '';
+  _acItems.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'ac-item' + (i === _acSel ? ' sel' : '');
+    const titre = document.createElement('div');
+    titre.textContent = (p.nom || '').toUpperCase() + (p.prenom ? ' ' + p.prenom : '');
+    const sousParts = [];
+    if (p.ddn) sousParts.push('né(e) le ' + p.ddn);
+    sousParts.push(p.nb_consultations + ' consultation' + (p.nb_consultations > 1 ? 's' : ''));
+    const sub = document.createElement('div');
+    sub.className = 'ac-sub';
+    sub.textContent = sousParts.join(' · ');
+    div.appendChild(titre); div.appendChild(sub);
+    // mousedown (pas click) : se déclenche avant le blur du champ.
+    div.addEventListener('mousedown', e => { e.preventDefault(); acPick(i); });
+    box.appendChild(div);
+  });
+  if (_acItems.length) show(box); else hide(box);
+}
+
+$('p-nom').addEventListener('input', () => {
+  clearTimeout(_acTimer);
+  const q = $('p-nom').value.trim();
+  if (q.length < 2) { acClose(); return; }
+  _acTimer = setTimeout(async () => {
+    const res = await api('suggerer_patients', q);
+    // Ignorer une réponse arrivée après que le champ a changé.
+    if ($('p-nom').value.trim() !== q) return;
+    _acItems = Array.isArray(res) ? res : [];
+    _acSel = _acItems.length ? 0 : -1;   // 1er résultat présélectionné
+    acRender();
+  }, 200);
+});
+
+$('p-nom').addEventListener('keydown', e => {
+  const open = _acItems.length > 0;
+  if (e.key === 'ArrowDown' && open) {
+    e.preventDefault(); _acSel = (_acSel + 1) % _acItems.length; acRender();
+  } else if (e.key === 'ArrowUp' && open) {
+    e.preventDefault(); _acSel = (_acSel - 1 + _acItems.length) % _acItems.length; acRender();
+  } else if (e.key === 'Enter') {
+    if (open && _acSel >= 0) { e.preventDefault(); acPick(_acSel); }
+    else submitPatient();
+  } else if (e.key === 'Escape' && open) {
+    e.stopPropagation(); acClose();
+  }
+});
+
+$('p-nom').addEventListener('blur', () => setTimeout(acClose, 120));
 
 function reqField(id, errId) {
   const v = $(id).value.trim();

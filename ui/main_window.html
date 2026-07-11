@@ -43,6 +43,10 @@
       <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 10v10h14V10"/></svg>
       <span>Accueil</span>
     </li>
+    <li class="nav-item" data-nav="patients">
+      <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5.5a3 3 0 0 1 0 5.5M21 20a6 6 0 0 0-4-5.6"/></svg>
+      <span>Patients</span>
+    </li>
     <li class="nav-item" data-nav="settings">
       <svg class="nav-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7 7 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5a7 7 0 0 0 .1-1z"/></svg>
       <span>Paramètres</span>
@@ -89,7 +93,10 @@
           </div>
           <div class="field">
             <label class="field-label" for="auth-specialty">Spécialité</label>
-            <input type="text" id="auth-specialty" placeholder="Médecin généraliste" autocomplete="off">
+            <div class="combo-wrap">
+              <input type="text" id="auth-specialty" placeholder="Médecine générale" autocomplete="off">
+              <div class="combo-list hidden" id="auth-specialty-list"></div>
+            </div>
           </div>
           <div id="signup-banner" class="hidden auth-banner"></div>
           <button class="btn btn-primary" id="btn-signup" style="width:100%;padding:11px;">Créer mon compte</button>
@@ -298,6 +305,55 @@
   </div>
 
   <!-- ═══════════════════════════════════════════════
+       VUE : PATIENTS (liste)
+       ═══════════════════════════════════════════════ -->
+  <div data-view="patients" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header">
+      <div class="page-title">Patients</div>
+      <div class="page-subtitle" id="patients-count"></div>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:18px;">
+        <div class="home-search" style="flex:1;margin-bottom:0;">
+          <div class="search-box">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="patient-search" autocomplete="off"
+                   placeholder="Rechercher un patient...">
+            <button type="button" class="search-clear hidden" id="patient-search-clear"
+                    title="Effacer" aria-label="Effacer">×</button>
+          </div>
+        </div>
+        <button class="btn btn-secondary" id="btn-add-patient" style="flex-shrink:0;">＋ Nouveau patient</button>
+      </div>
+      <div id="patients-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : DÉTAIL PATIENT
+       ═══════════════════════════════════════════════ -->
+  <div data-view="patient-detail" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header" style="display:flex;align-items:center;gap:14px;">
+      <button class="btn btn-secondary btn-sm" id="patient-back" style="flex-shrink:0;">← Retour</button>
+      <div style="display:flex;align-items:center;gap:12px;flex:1;">
+        <div class="av" id="pd-avatar" style="flex-shrink:0;">··</div>
+        <div>
+          <div class="page-title" id="pd-name"></div>
+          <div class="page-subtitle" id="pd-sub"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="pd-new-consult" style="flex-shrink:0;">＋ Nouvelle consultation avec ce patient</button>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div class="consult-timeline" id="pd-consult-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
        VUE : PARAMÈTRES
        ═══════════════════════════════════════════════ -->
   <div data-view="settings" class="hidden" style="flex:1;display:flex;flex-direction:column;">
@@ -452,6 +508,32 @@
   </div>
 </div>
 
+<!-- Modale : nouveau patient -->
+<div id="add-patient-modal" class="confirm-overlay hidden">
+  <div class="confirm-box">
+    <div class="confirm-title">Nouveau patient</div>
+    <div style="display:flex;flex-direction:column;gap:14px;margin:16px 0;text-align:left;">
+      <div class="field">
+        <label class="field-label">Nom <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="np-nom" autocomplete="off" placeholder="DUPONT">
+      </div>
+      <div class="field">
+        <label class="field-label">Prénom (facultatif)</label>
+        <input type="text" id="np-prenom" autocomplete="off" placeholder="Marie">
+      </div>
+      <div class="field">
+        <label class="field-label">Date de naissance (facultatif)</label>
+        <input type="text" id="np-ddn" autocomplete="off" placeholder="JJ/MM/AAAA">
+      </div>
+    </div>
+    <div id="np-banner" class="banner banner-err hidden" style="margin-bottom:12px;"></div>
+    <div class="confirm-actions">
+      <button class="btn btn-primary" id="np-save">Enregistrer</button>
+      <button class="btn btn-secondary" id="np-cancel">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Panneau profil flottant ──────────────────────────────── -->
 <div id="profile-overlay" class="profile-overlay hidden"></div>
 <div id="profile-panel" class="profile-panel hidden">
@@ -505,6 +587,7 @@ function resetAuthForm() {
   ['signup-banner','login-banner'].forEach(id => {
     const el = $(id); if (el) { el.textContent = ''; el.classList.add('hidden'); }
   });
+  if (typeof spClose === 'function') spClose();
 }
 
 function navigate(viewName) {
@@ -586,6 +669,74 @@ function authBanner(id, msg, isErr) {
   el.className = 'auth-banner ' + (isErr ? 'banner-err' : 'banner-ok');
   el.classList.remove('hidden');
 }
+
+/* ── Combobox spécialité (dropdown filtrant + saisie libre acceptée) ── */
+
+const SPECIALITES = [
+  'Médecine générale', 'Cardiologie', 'Dermatologie', 'Endocrinologie',
+  'Gastro-entérologie', 'Gynécologie médicale', 'Gynécologie-obstétrique',
+  'Gériatrie', 'Médecine interne', 'Médecine du travail', 'Néphrologie',
+  'Neurologie', 'Ophtalmologie', 'ORL', 'Pédiatrie', 'Pneumologie',
+  'Psychiatrie', 'Radiologie', 'Rhumatologie', 'Urologie', 'Chirurgie',
+  'Anesthésie-réanimation', "Médecine d'urgence", 'Allergologie',
+  'Médecine physique et de réadaptation', 'Santé publique',
+  'Sage-femme', 'Infirmier(ère) en pratique avancée',
+];
+
+let _spItems = [];   // suggestions affichées
+let _spSel   = -1;   // index surligné
+
+function spClose() {
+  hide($('auth-specialty-list'));
+  _spItems = []; _spSel = -1;
+}
+
+function spPick(i) {
+  if (_spItems[i] === undefined) return;
+  $('auth-specialty').value = _spItems[i];
+  spClose();
+}
+
+function spRender() {
+  const box = $('auth-specialty-list');
+  box.innerHTML = '';
+  _spItems.forEach((s, i) => {
+    const div = document.createElement('div');
+    div.className = 'combo-item' + (i === _spSel ? ' sel' : '');
+    div.textContent = s;
+    // mousedown : se déclenche avant le blur du champ.
+    div.addEventListener('mousedown', e => { e.preventDefault(); spPick(i); });
+    box.appendChild(div);
+  });
+  if (_spItems.length) show(box); else hide(box);
+}
+
+function spFilter() {
+  const q = normalise($('auth-specialty').value.trim());
+  // Match sur n'importe quelle partie ("cardio" → Cardiologie).
+  _spItems = !q ? SPECIALITES.slice()
+                : SPECIALITES.filter(s => normalise(s).includes(q));
+  _spSel = -1;
+  spRender();
+}
+
+$('auth-specialty').addEventListener('focus', spFilter);
+$('auth-specialty').addEventListener('input', spFilter);
+$('auth-specialty').addEventListener('blur', () => setTimeout(spClose, 120));
+
+$('auth-specialty').addEventListener('keydown', e => {
+  const open = _spItems.length > 0;
+  if (e.key === 'ArrowDown' && open) {
+    e.preventDefault(); _spSel = (_spSel + 1) % _spItems.length; spRender();
+  } else if (e.key === 'ArrowUp' && open) {
+    e.preventDefault(); _spSel = (_spSel - 1 + _spItems.length) % _spItems.length; spRender();
+  } else if (e.key === 'Enter' && open && _spSel >= 0) {
+    e.preventDefault(); spPick(_spSel);
+  } else if (e.key === 'Escape' && open) {
+    e.stopPropagation(); spClose();
+  }
+  // Toute saisie hors liste reste acceptée telle quelle (aucune validation).
+});
 
 $('btn-signup').addEventListener('click', async () => {
   const nom       = $('auth-name').value.trim();
@@ -769,6 +920,9 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if (nav === 'home') {
       await loadHome();
       navigate('home');
+    } else if (nav === 'patients') {
+      await loadPatients();
+      navigate('patients');
     } else if (nav === 'settings') {
       await loadSettings();
       navigate('settings');
@@ -1088,6 +1242,12 @@ $('delete-modal').addEventListener('click', e => {
 /* ---- Démarrage consultation ---- */
 
 $('btn-new-consult').addEventListener('click', async () => {
+  // Réinitialiser l'état du bouton Démarrer (resté disabled après une
+  // consultation précédente lancée avec succès).
+  const btnStart = $('dp-start');
+  btnStart.disabled = false;
+  btnStart.textContent = 'Démarrer la consultation';
+  clearBanner($('dp-banner'));
   show($('device-picker'));
   $('btn-new-consult').disabled = true;
   let devs = await api('get_devices');
@@ -1114,6 +1274,7 @@ $('dp-start').addEventListener('click', async () => {
   const res = await api('begin_consultation', $('dp-mic').value, $('dp-output').value);
   btn.textContent = 'Démarrer la consultation';
   if (res && res.ok) {
+    btn.disabled = false;
     hide($('device-picker'));
     $('btn-new-consult').disabled = false;
   } else {
@@ -1257,6 +1418,171 @@ $('detail-open-folder').addEventListener('click', async () => {
   if (currentConsult && currentConsult.file_path)
     await api('open_folder_os', currentConsult.file_path);
 });
+/* ------------------------------------------------------------------ */
+/*  Vue Patients                                                       */
+/* ------------------------------------------------------------------ */
+
+let allPatients = [];
+
+async function loadPatients() {
+  allPatients = (await api('get_patients')) || [];
+  renderPatientsFiltered();
+}
+
+function patientLabel(p) {
+  return ((p.nom || '').toUpperCase() + ' ' + (p.prenom || '')).trim();
+}
+
+function shortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return pad(d.getDate()) + '/' + pad(d.getMonth() + 1);
+}
+
+function renderPatientsFiltered() {
+  const input    = $('patient-search');
+  const clearBtn = $('patient-search-clear');
+  const list     = $('patients-list');
+  const q = normalise(input.value.trim());
+  clearBtn.classList.toggle('hidden', input.value.length === 0);
+
+  const items = !q ? allPatients : allPatients.filter(p =>
+    normalise(p.nom).includes(q) || normalise(p.prenom).includes(q));
+
+  const s = allPatients.length > 1 ? 's' : '';
+  $('patients-count').textContent =
+    allPatients.length + ' patient' + s + ' suivi' + s;
+
+  list.innerHTML = '';
+  if (items.length === 0) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">∅</div>' +
+      '<div>' + (allPatients.length === 0
+        ? 'Aucun patient pour le moment — les patients apparaissent après leur première consultation.'
+        : 'Aucun patient trouvé.') + '</div></div>';
+    return;
+  }
+
+  items.forEach(p => {
+    const nomComplet = patientLabel(p);
+    const sousParts = [
+      p.nb_consultations === 0 ? 'Aucune consultation' :
+      p.nb_consultations + ' consultation' + (p.nb_consultations > 1 ? 's' : '') +
+      (p.derniere_consultation ? ' · dernière le ' + shortDate(p.derniere_consultation) : '')
+    ];
+    if (p.ddn) sousParts.push('né(e) le ' + p.ddn);
+    const card = document.createElement('div');
+    card.className = 'consult';
+    card.innerHTML =
+      '<div class="av av-' + avatarVariant(nomComplet) + '">' + esc(initiales(p)) + '</div>' +
+      '<div class="consult-body"><div class="pname">' + esc(nomComplet) + '</div>' +
+        '<div class="reason">' + esc(sousParts.join(' · ')) + '</div></div>' +
+      '<span class="consult-go">Voir →</span>';
+    card.addEventListener('click', () => showPatientDetail(p));
+    list.appendChild(card);
+  });
+}
+
+$('patient-search').addEventListener('input', renderPatientsFiltered);
+$('patient-search-clear').addEventListener('click', () => {
+  $('patient-search').value = '';
+  renderPatientsFiltered();
+});
+
+async function showPatientDetail(p) {
+  _patientCourant = p;
+  const nomComplet = patientLabel(p);
+  $('pd-avatar').textContent = initiales(p);
+  $('pd-avatar').className   = 'av av-' + avatarVariant(nomComplet);
+  $('pd-name').textContent   = nomComplet;
+  const sous = [];
+  if (p.ddn) sous.push('né(e) le ' + p.ddn);
+  sous.push(p.nb_consultations === 0 ? 'Aucune consultation'
+    : p.nb_consultations + ' consultation' + (p.nb_consultations > 1 ? 's' : ''));
+  $('pd-sub').textContent = sous.join(' · ');
+
+  // Toutes ses consultations, chronologie récente en premier (même format
+  // timeline que l'accueil : heure, durée, motif).
+  const ids = new Set(p.consultation_ids || []);
+  if (!allConsultations.length) {
+    allConsultations = (await api('get_consultations')) || [];
+  }
+  const consults = allConsultations.filter(c => ids.has(c.id));
+  const list = $('pd-consult-list');
+  list.innerHTML = '';
+  let lastDay = null;
+  consults.forEach(c => {
+    const dl = dayLabel(c.date);
+    if (dl !== lastDay) {
+      lastDay = dl;
+      const h = document.createElement('div');
+      h.className = 'tl-daylabel';
+      h.innerHTML = '<span>' + esc(dl) + '</span><span class="tl-rule"></span>';
+      list.appendChild(h);
+    }
+    const motif = (c.patient || {}).motif || '—';
+    const card = document.createElement('div');
+    card.className = 'consult';
+    card.innerHTML =
+      '<div class="time-rail"><span class="hm">' + esc(timeHM(c.date)) + '</span>' +
+        '<span class="dur">' + (c.duration_min ? esc(c.duration_min + ' min') : '') + '</span></div>' +
+      '<div class="consult-body"><div class="reason" style="margin-top:2px;">' + esc(motif) + '</div></div>' +
+      '<span class="consult-go">Ouvrir →</span>';
+    card.addEventListener('click', () => showDetail(c));
+    list.appendChild(card);
+  });
+  navigate('patient-detail');
+}
+
+$('patient-back').addEventListener('click', () => navigate('patients'));
+
+/* ---- Modale "Nouveau patient" ---- */
+
+$('btn-add-patient').addEventListener('click', () => {
+  ['np-nom','np-prenom','np-ddn'].forEach(id => $(id).value = '');
+  hide($('np-banner'));
+  show($('add-patient-modal'));
+  $('np-nom').focus();
+});
+
+$('np-cancel').addEventListener('click', () => hide($('add-patient-modal')));
+
+$('np-save').addEventListener('click', async () => {
+  const nom = $('np-nom').value.trim();
+  if (!nom) {
+    $('np-banner').textContent = 'Le nom est obligatoire.';
+    show($('np-banner'));
+    return;
+  }
+  $('np-save').disabled = true;
+  const res = await api('ajouter_patient', nom,
+                        $('np-prenom').value.trim(), $('np-ddn').value.trim());
+  $('np-save').disabled = false;
+  if (!res || !res.ok) {
+    $('np-banner').textContent = (res && res.error) || 'Enregistrement impossible.';
+    show($('np-banner'));
+    return;
+  }
+  hide($('add-patient-modal'));
+  await loadPatients();
+});
+
+/* ---- Nouvelle consultation depuis la fiche patient ---- */
+
+let _patientCourant = null;   // patient affiché dans la vue détail
+
+$('pd-new-consult').addEventListener('click', async () => {
+  if (!_patientCourant) return;
+  // Mémorisé côté Python : l'overlay (fenêtre séparée) le récupère
+  // à l'ouverture du formulaire patient, puis il est consommé.
+  await api('set_patient_preselectionne',
+            _patientCourant.nom || '', _patientCourant.prenom || '',
+            _patientCourant.ddn || '');
+  await loadHome();
+  navigate('home');
+  $('btn-new-consult').click();   // même flux que l'accueil (device picker)
+});
+
 /* ------------------------------------------------------------------ */
 /*  Panneau profil sidebar                                             */
 /* ------------------------------------------------------------------ */
