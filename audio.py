@@ -21,11 +21,13 @@ CHANNELS      = 1          # mono
 FRAME_MS      = 30         # webrtcvad accepte 10/20/30 ms (= CHUNK_MS)
 FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000   # 480 échantillons / frame
 VAD_LEVEL          = 2          # 0 (permissif) .. 3 (agressif) — niveau 2 pour audio WebRTC compressé
-SILENCE_MS         = 350        # silence marquant la fin d'un tour de parole
+SILENCE_MS         = 350        # silence marquant la fin d'un tour de parole (télé)
+SILENCE_MS_CABINET = 250        # cabinet : échanges plus rapides (pas de latence réseau) → couper plus tôt sépare mieux les locuteurs
 MIN_SPEECH_MS      = 300        # ignore les bruits trop courts (réduit pour capturer parole courte)
 RMS_MIN            = 0.008      # énergie minimale globale (assoupli)
 RMS_MIN_LOOPBACK   = 0.006      # seuil loopback : audio compressé/normalisé a un RMS plus bas
-RMS_MIN_MIC        = 0.015      # seuil micro : plus strict contre l'écho ambiant
+RMS_MIN_MIC        = 0.015      # seuil micro (télé) : médecin près du casque, strict contre l'écho
+RMS_MIN_CABINET    = 0.005      # seuil micro (cabinet) : deux locuteurs à distance variable du micro
 MAX_SEG_MS         = 4000       # flush forcé : un segment au moins toutes les 4 s
 
 
@@ -76,6 +78,14 @@ def resoudre_loopback(nom):
 def loopback_defaut():
     """Loopback de la sortie Windows par défaut, sinon None."""
     return resoudre_loopback(nom_sortie_defaut())
+
+
+def micro_defaut():
+    """Micro Windows par défaut (objet device), sinon None (jamais d'exception)."""
+    try:
+        return sc.default_microphone()
+    except Exception:
+        return None
 
 
 def resoudre_micro(nom):

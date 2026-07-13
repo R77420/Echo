@@ -403,18 +403,24 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(20,30,40,0.32);
+  background: rgba(0,0,0,0.45);   /* backdrop opaque : détache la modale du fond */
   padding: 24px;
 }
 .confirm-overlay.hidden { display: none; }
 .confirm-box {
-  background: var(--bg-card);
+  /* Fond OPAQUE explicite : var(--bg-card) est semi-transparent en dark
+     (effet verre voulu pour les cartes, mais illisible pour une modale). */
+  background: #ffffff;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: 0 12px 40px rgba(0,0,0,0.22);
   width: 100%;
   max-width: 380px;
   padding: 24px;
+}
+[data-theme="dark"] .confirm-box {
+  background: #1a2e28;
+  border: 1px solid rgba(255,255,255,0.12);
 }
 .confirm-title {
   font-size: 16px;
@@ -783,6 +789,24 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   cursor: pointer;
 }
 .combo-item:hover, .combo-item.sel { background: var(--accent-lt); color: var(--accent); }
+
+/* Modale choix du mode de consultation */
+.mode-cards { display: flex; gap: 14px; margin: 20px 0; }
+.mode-card {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 22px 16px; background: #ffffff;   /* opaque : carte dans une modale */
+  border: 2px solid var(--border); border-radius: var(--r-md);
+  cursor: pointer; text-align: center; font-family: inherit;
+  transition: border-color var(--t), background var(--t), transform var(--t);
+}
+[data-theme="dark"] .mode-card { background: #16271f; border-color: rgba(255,255,255,0.1); }
+.mode-card:hover { border-color: var(--accent); background: var(--accent-lt); transform: translateY(-2px); }
+[data-theme="dark"] .mode-card:hover { background: var(--accent-lt); }
+.mode-card.preselected { border-color: var(--accent); }
+.mode-emoji { font-size: 34px; line-height: 1; }
+.mode-title { font-size: 15px; font-weight: 600; color: var(--txt-primary); }
+.mode-desc { font-size: 12.5px; color: var(--txt-secondary); line-height: 1.4; }
+
 
 .search-count {
   font-size: 12px;
@@ -1236,6 +1260,11 @@ input[type="range"] {
   font-size: 19px; font-weight: 600; letter-spacing: -0.01em;
   color: #F0F3F1;
 }
+.mode-badge {
+  margin-left: 10px; padding: 3px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; color: #9FB0AA;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+}
 .rec-badge {
   display: flex; align-items: center; gap: 7px;
   padding: 4px 11px; border-radius: 999px;
@@ -1289,6 +1318,7 @@ input[type="range"] {
 }
 .turn.med .tag { background: #E3F3EA; color: #176147; }
 .turn.pat .tag { background: #E2EEF8; color: #2F6BA3; }
+.turn.conv .tag { background: #24332E; color: #9FB0AA; }   /* mode cabinet : neutre */
 .turn .ts {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 11px; color: #9AA49E;
@@ -1323,6 +1353,9 @@ input[type="range"] {
 .spk-med.active { background: #1F7A5C; color: #FFFFFF; border-color: #1F7A5C; box-shadow: 0 4px 14px rgba(31,122,92,0.3); }
 .spk-pat { background: #1A3530; color: #9FB0AA; border-color: transparent; }
 .spk-pat.active { background: #2F6BA3; color: #FFFFFF; border-color: #2F6BA3; box-shadow: 0 4px 14px rgba(47,107,163,0.3); }
+/* Mode cabinet : indicateur unique de conversation */
+.spk-conv { background: #1A3530; color: #9FB0AA; border-color: transparent; }
+.spk-conv.active { background: #1F7A5C; color: #FFFFFF; border-color: #1F7A5C; box-shadow: 0 4px 14px rgba(31,122,92,0.3); }
 .end-btn {
   flex-shrink: 0; display: flex; align-items: center; gap: 8px;
   padding: 12px 18px; border-radius: 12px;

@@ -39,6 +39,7 @@ import queue
 import re
 import subprocess
 import sys
+import traceback
 import tempfile
 import threading
 import time
@@ -56,9 +57,10 @@ import storage  # persistance : historique JSON + génération .docx (fonctions 
 # Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
 from audio import (
     SAMPLE_RATE, CHANNELS, FRAME_MS, FRAME_SAMPLES, VAD_LEVEL,
-    SILENCE_MS, MIN_SPEECH_MS, RMS_MIN, RMS_MIN_LOOPBACK, RMS_MIN_MIC, MAX_SEG_MS,
+    SILENCE_MS, SILENCE_MS_CABINET, MIN_SPEECH_MS,
+    RMS_MIN, RMS_MIN_LOOPBACK, RMS_MIN_MIC, RMS_MIN_CABINET, MAX_SEG_MS,
     lister_sorties, lister_micros, nom_sortie_defaut, nom_micro_defaut,
-    resoudre_loopback, loopback_defaut, resoudre_micro,
+    resoudre_loopback, loopback_defaut, resoudre_micro, micro_defaut,
     loopback_par_nom, micro_par_nom,
     rms, garder_si_audible, audio_to_wav_buffer, VADSegmenter,
 )
@@ -132,10 +134,16 @@ def _get_gain(label):
 
 # ---- État VAD temps réel (qui parle maintenant) ----
 # Lecture/écriture de booléens simples : atomique sous GIL, pas de lock requis.
-_speaking_now = {"medecin": False, "patient": False}
+_speaking_now = {"medecin": False, "patient": False, "conversation": False}
 
 def _set_speaking(label, is_speech):
-    _speaking_now["patient" if label == "Patient" else "medecin"] = bool(is_speech)
+    if label == "Patient":
+        cle = "patient"
+    elif label == "Conversation":
+        cle = "conversation"
+    else:
+        cle = "medecin"
+    _speaking_now[cle] = bool(is_speech)
 
 
 # ----------------------------- CONFIG PERSISTANTE ----------------------------
@@ -408,9 +416,15 @@ def capturer(source_factory, label):
     quelconque) coupe proprement CE flux avec un message simple, sans tuer
     l'autre flux ni l'application.
     """
-    libelle = "patient" if label == "Patient" else "médecin"
     is_loopback = (label == "Patient")
-    rms_seuil = RMS_MIN_LOOPBACK if is_loopback else RMS_MIN_MIC
+    if label == "Patient":
+        libelle, rms_seuil = "patient", RMS_MIN_LOOPBACK
+    elif label == "Conversation":
+        # Mode cabinet : micro seul, deux locuteurs à distance variable →
+        # seuil plus permissif que le mic télé (médecin près du casque).
+        libelle, rms_seuil = "conversation", RMS_MIN_CABINET
+    else:
+        libelle, rms_seuil = "médecin", RMS_MIN_MIC
 
     try:
         mic = source_factory()
@@ -421,8 +435,12 @@ def capturer(source_factory, label):
             "La capture (%s) n'a pas pu démarrer. L'application reste utilisable." % libelle))
         return
 
-    segmenteur = VADSegmenter()   # segmentation VAD (logique dans audio.py)
-    _caplog.debug("[%s] thread démarré — seuil RMS=%.4f", label.upper(), rms_seuil)
+    # Cabinet : silence de fin de tour plus court → sépare mieux deux locuteurs
+    # qui enchaînent vite (pas de latence réseau comme en télé).
+    silence_ms = SILENCE_MS_CABINET if label == "Conversation" else SILENCE_MS
+    segmenteur = VADSegmenter(silence_ms=silence_ms)
+    _caplog.debug("[%s] thread démarré — seuil RMS=%.4f silence=%dms",
+                  label.upper(), rms_seuil, silence_ms)
 
     try:
         with mic.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS, blocksize=FRAME_SAMPLES) as rec:
@@ -641,14 +659,28 @@ PATTERNS_HALLUCINATION_SOUS_TITRAGE = [
     "et moi.", "et la vie.",
 ]
 
+# Verbes conjugués courants : leur absence dans une longue énumération
+# (≥ 3 virgules) trahit un charabia sans structure de phrase (hallucination
+# française en liste de mots). Formes accentuées ET non accentuées.
+_VERBES_COURANTS = {
+    "est", "sont", "a", "ont", "ai", "as", "avez", "avons",
+    "suis", "es", "êtes", "etes", "va", "vais", "allez", "vont",
+    "fait", "fais", "faites", "prend", "prends", "prenez",
+    "peut", "peux", "pouvez", "faut", "dois", "doit", "devez",
+    "ressens", "ressent", "avale", "pique", "examine", "vois", "voit",
+    "prescris", "prescrit", "était", "etait", "avait", "veux", "veut",
+}
+
 
 def est_hallucination_generique(texte):
     """Vrai si le texte est une hallucination Whisper connue.
 
-    Trois filtres :
+    Filtres :
     1. Pattern exact (liste PATTERNS_HALLUCINATION_SOUS_TITRAGE)
     2. Segment court (≤ 4 mots) commençant par « et » → transition de remplissage
     3. Segment d'un seul mot ou ponctuation seule → bruit
+    4. Mot unique répété 3+ fois → boucle Whisper
+    5. Bascule anglaise (≥ 2 mots anglais courants) → hallucination sur bruit/silence
     """
     t = (texte or "").strip().lower()
     if not t:
@@ -666,6 +698,17 @@ def est_hallucination_generique(texte):
     # Filtre 4 : mot unique répété 3+ fois → boucle Whisper
     if len(set(mots)) == 1 and len(mots) >= 3:
         return True
+    # Filtre 5 : bascule en anglais (Whisper hallucine en anglais sur du bruit)
+    if correction.contient_bascule_anglaise(t):
+        return True
+    # Filtre 6 : énumération sans verbe (≥ 3 virgules et aucun verbe conjugué
+    # courant) → charabia français probable. Les vraies énumérations médicales
+    # ont un verbe ou moins de virgules ; en cas de doute on garde (le filet
+    # « [?] » de l'attribution attrape le reste).
+    if t.count(",") >= 3:
+        mots_alpha = set(re.findall(r"[a-zàâäéèêëïîôöùûüç]+", t))
+        if not (mots_alpha & _VERBES_COURANTS):
+            return True
     return False
 
 
@@ -813,42 +856,49 @@ def transcrire():
         except queue.Empty:
             continue
 
-        # Filtre RMS déjà appliqué dans capturer() avec seuil adapté
-        # (RMS_MIN_LOOPBACK pour patient, RMS_MIN_MIC pour médecin).
-        texte = None
-        if cloud_on:
-            try:
-                texte = _transcrire_cloud(cloud_client, audio)
-            except Exception:
-                # Repli local : charger le modèle s'il est dispo, sinon proposer
-                # le téléchargement de secours.
-                if local_model is None and modele_local_present():
-                    local_model = _charger_modele_local()
-                if local_model is not None:
-                    if not fallback_warned:
-                        display_queue.put(("AVIS",
-                            "Connexion indisponible — transcription locale (qualité réduite)"))
-                        fallback_warned = True
-                elif not backup_signaled:
-                    display_queue.put(("BESOIN_SECOURS",
-                        "Téléchargement du modèle de secours requis (1,6 Go). Continuer ?"))
-                    backup_signaled = True
+        # Toute exception du traitement d'UN segment est journalisée (traceback
+        # complet) et n'interrompt jamais le worker : sinon la transcription
+        # s'arrêterait silencieusement pour toute la consultation.
+        try:
+            # Filtre RMS déjà appliqué dans capturer() avec le seuil adapté à la
+            # source (loopback patient, mic médecin télé, mic cabinet).
+            texte = None
+            if cloud_on:
+                try:
+                    texte = _transcrire_cloud(cloud_client, audio)
+                except Exception:
+                    # Repli local : charger le modèle s'il est dispo, sinon
+                    # proposer le téléchargement de secours.
+                    if local_model is None and modele_local_present():
+                        local_model = _charger_modele_local()
+                    if local_model is not None:
+                        if not fallback_warned:
+                            display_queue.put(("AVIS",
+                                "Connexion indisponible — transcription locale (qualité réduite)"))
+                            fallback_warned = True
+                    elif not backup_signaled:
+                        display_queue.put(("BESOIN_SECOURS",
+                            "Téléchargement du modèle de secours requis (1,6 Go). Continuer ?"))
+                        backup_signaled = True
 
-        if texte is None and local_model is not None:
-            texte = _transcrire_local(local_model, audio)
+            if texte is None and local_model is not None:
+                texte = _transcrire_local(local_model, audio)
 
-        texte = corriger_transcription((texte or "").strip())
-        # Filtre anti-hallucination de sous-titrage : ni affiché, ni sauvegardé,
-        # ni injecté dans le contexte du prochain segment.
-        if texte and not est_hallucination_generique(texte):
-            with _contexte_lock:
-                ctx_correction = _dernier_contexte
-            _maj_contexte(texte)   # alimente le prompt du prochain segment
-            # Affichage immédiat du texte brut ; la correction LLM arrive
-            # ensuite via _correction_worker et remplace le tour à l'écran.
-            seg_id = _nouveau_seg_id()
-            display_queue.put((label, texte, seg_id))
-            _correction_queue.put((seg_id, texte, ctx_correction))
+            texte = corriger_transcription((texte or "").strip())
+            # Filtre anti-hallucination de sous-titrage : ni affiché, ni
+            # sauvegardé, ni injecté dans le contexte du prochain segment.
+            if texte and not est_hallucination_generique(texte):
+                with _contexte_lock:
+                    ctx_correction = _dernier_contexte
+                _maj_contexte(texte)   # alimente le prompt du prochain segment
+                # Affichage immédiat du texte brut ; la correction LLM arrive
+                # ensuite via _correction_worker et remplace le tour à l'écran.
+                seg_id = _nouveau_seg_id()
+                display_queue.put((label, texte, seg_id))
+                _correction_queue.put((seg_id, texte, ctx_correction))
+        except Exception:
+            _caplog.error("transcrire: segment %s ignoré (exception)\n%s",
+                          label, traceback.format_exc())
 
 
 # ----------------------------- EXPORT DOCUMENT (delegue a storage.py) -------
@@ -1661,13 +1711,14 @@ class Api:
         self._resume_status = "idle"
         self._resume_text   = None
         self._webview_mod   = None  # module webview, disponible après start
+        self._mode          = "tele"  # "tele" ou "cabinet" (présentiel)
 
     # ---- Polling -------------------------------------------------------
 
-    def get_updates(self):
-        """Vide la display_queue et retourne les nouvelles entrées.
-        Appelé toutes les ~200 ms depuis le JS.
-        Retourne [{type, texte, timestamp}, ...]."""
+    def _drain_display(self):
+        """Vide la display_queue → met à jour self._entries et renvoie les
+        nouvelles entrées pour le JS. Partagé par get_updates() (polling) et
+        arreter_capture() (drainage final au clic Terminer)."""
         items = []
         while True:
             try:
@@ -1677,7 +1728,7 @@ class Api:
             label, texte = item[0], item[1]
             seg_id = item[2] if len(item) > 2 else None
             ts = datetime.datetime.now().strftime("%H:%M:%S")
-            if label in ("Medecin", "Patient"):
+            if label in ("Medecin", "Patient", "Conversation"):
                 with self._lock:
                     if seg_id is not None:
                         self._seg_index[seg_id] = len(self._entries)
@@ -1694,13 +1745,49 @@ class Api:
                           "timestamp": ts, "seg_id": seg_id})
         return items
 
+    def get_updates(self):
+        """Vide la display_queue et retourne les nouvelles entrées.
+        Appelé toutes les ~200 ms depuis le JS.
+        Retourne [{type, texte, timestamp}, ...]."""
+        return self._drain_display()
+
+    def arreter_capture(self):
+        """Arrêt IMMÉDIAT de la capture au clic « Terminer » : aucun segment
+        audio n'est produit ni transcrit après ce point (évite les
+        hallucinations sur le bruit ambiant pendant que le médecin remplit le
+        formulaire). Ne ferme PAS l'overlay ni ne restaure les fenêtres
+        (c'est le rôle de end_consultation).
+
+        Séquence : figer la capture → attendre les threads → intégrer les
+        derniers segments déjà transcrits → purger l'audio « en vol » non
+        transcrit. Retourne les dernières entrées pour un rendu final."""
+        stop_event.set()
+        # Attendre l'arrêt des threads de capture/transcription (segments en vol).
+        for t in getattr(self, "_threads", []):
+            try:
+                t.join(timeout=1.0)
+            except Exception:
+                pass
+        # Purger l'audio brut non encore transcrit ET la file de correction :
+        # ces segments post-clic ne doivent JAMAIS produire de texte.
+        for q in (segment_queue, _correction_queue):
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+        self._started = False
+        # Intégrer les segments déjà transcrits avant l'arrêt (transcript figé).
+        return self._drain_display()
+
     def get_speaking_status(self):
         """État VAD temps réel pour l'indicateur « qui parle ».
         Appelé toutes les ~120 ms depuis le JS."""
         return {
-            "medecin": _speaking_now.get("medecin", False),
-            "patient": _speaking_now.get("patient", False),
-            "active":  not stop_event.is_set(),
+            "medecin":      _speaking_now.get("medecin", False),
+            "patient":      _speaking_now.get("patient", False),
+            "conversation": _speaking_now.get("conversation", False),
+            "active":       not stop_event.is_set(),
         }
 
     # ---- Périphériques -------------------------------------------------
@@ -1739,12 +1826,40 @@ class Api:
 
     # ---- Démarrage -----------------------------------------------------
 
-    def start(self, mic_name, output_name):
+    def start(self, mic_name, output_name, mode="tele"):
         """Résout les périphériques, sauvegarde la config et démarre les threads.
-        Retourne {ok, loopback?, mic?, warning?} ou {ok:false, error}."""
+
+        mode="tele"    : loopback (patient) + micro (médecin), étiquetage par canal.
+        mode="cabinet" : micro seul, tout étiqueté « Conversation » (attribution
+                         des locuteurs par LLM en fin de consultation).
+        Retourne {ok, loopback?, mic?, warning?, mode} ou {ok:false, error}."""
         if self._started:
             return {"ok": False, "error": "Déjà démarré."}
 
+        # ---- Mode présentiel : micro seul ----
+        if mode == "cabinet":
+            micro = resoudre_micro(mic_name) if mic_name else micro_defaut()
+            if micro is None:
+                return {"ok": False,
+                        "error": ("Aucun micro disponible. Branchez un micro, "
+                                  "puis relancez Écho.")}
+            cfg = charger_config()
+            cfg["micro"] = mic_name or ""
+            cfg["mode_consultation"] = "cabinet"
+            sauver_config(cfg)
+
+            threads = [
+                threading.Thread(target=transcrire, daemon=True),
+                threading.Thread(target=capturer,
+                                 args=(lambda: micro, "Conversation"), daemon=True),
+            ]
+            for t in threads:
+                t.start()
+            self._threads = threads
+            self._started = True
+            return {"ok": True, "mic": micro.name, "mode": "cabinet"}
+
+        # ---- Mode téléconsultation : loopback + micro (inchangé) ----
         loopback = resoudre_loopback(output_name) or loopback_defaut()
         if loopback is None:
             return {"ok": False,
@@ -1758,6 +1873,7 @@ class Api:
         cfg = charger_config()
         cfg["sortie"] = output_name
         cfg["micro"]  = mic_name or ""
+        cfg["mode_consultation"] = "tele"
         sauver_config(cfg)
 
         threads = [
@@ -1774,7 +1890,7 @@ class Api:
 
         self._threads = threads   # mémorisés pour attendre leur fin au restart
         self._started = True
-        result = {"ok": True, "loopback": loopback.name}
+        result = {"ok": True, "loopback": loopback.name, "mode": "tele"}
         if micro is None:
             result["warning"] = (
                 "Aucun micro détecté — seule la voix du patient sera transcrite. "
@@ -1880,6 +1996,9 @@ class Api:
             "gain_mic":          cfg.get("gain_mic", 1.0),
             "theme":             cfg.get("theme") or "light",
             "version":           APP_VERSION,
+            "mode_consultation": cfg.get("mode_consultation", ""),
+            "devices_configured": bool(cfg.get("micro") or cfg.get("sortie")),
+            "specialty":         cfg.get("specialty", ""),
         }
 
     def complete_onboarding(self, doctor_name, mic_name, output_name):
@@ -1984,6 +2103,7 @@ class Api:
         devs = self.get_devices()
         return {
             "doctor_name":   cfg.get("doctor_name", ""),
+            "specialty":     cfg.get("specialty", ""),
             "save_folder":   cfg.get("dossier_sauvegarde", ""),
             "gain_patient":  cfg.get("gain_patient", 1.0),
             "gain_mic":      cfg.get("gain_mic", 1.0),
@@ -2011,7 +2131,33 @@ class Api:
         if "theme"  in data:
             cfg["theme"] = "dark" if data["theme"] == "dark" else "light"
             appliquer_titlebar_theme(cfg["theme"])   # accorde la titlebar
+        # Spécialité : persistée localement ET propagée au backend (best-effort).
+        specialite_modifiee = ("specialty" in data
+                               and (data["specialty"] or "") != cfg.get("specialty", ""))
+        if "specialty" in data:
+            cfg["specialty"] = data["specialty"] or ""
         sauver_config(cfg)
+        if specialite_modifiee:
+            self._maj_specialite_backend(cfg.get("medecin_id", ""), cfg["specialty"])
+        return {"ok": True}
+
+    def _maj_specialite_backend(self, medecin_id, specialite):
+        """Propage la spécialité vers Supabase (best-effort, jamais bloquant :
+        la config locale reste la source de vérité pour l'affichage)."""
+        if not medecin_id:
+            return
+        try:
+            _appel_api("maj-specialite",
+                       {"medecin_id": medecin_id, "specialite": specialite})
+        except Exception:
+            pass
+
+    def maj_specialite(self, specialite):
+        """Met à jour la spécialité (config locale + backend). Exposée au JS."""
+        cfg = charger_config()
+        cfg["specialty"] = specialite or ""
+        sauver_config(cfg)
+        self._maj_specialite_backend(cfg.get("medecin_id", ""), cfg["specialty"])
         return {"ok": True}
 
     def apply_theme(self, theme):
@@ -2070,8 +2216,18 @@ class Api:
 
     # ===== DÉMARRAGE / FIN DE CONSULTATION ===================================
 
-    def begin_consultation(self, mic_name, output_name):
-        """Lance la consultation depuis la fenêtre principale."""
+    def begin_consultation(self, mode="tele", mic_name="", output_name=""):
+        """Lance la consultation depuis la fenêtre principale.
+
+        `mode` : "cabinet" (micro seul) ou "tele" (loopback + micro).
+        Les périphériques sont lus depuis la config si non fournis (le flux
+        normal ne passe plus par le sélecteur — cf. modale de choix du mode)."""
+        cfg = charger_config()
+        if not mic_name:
+            mic_name = cfg.get("micro", "")
+        if not output_name:
+            output_name = cfg.get("sortie", "")
+        self._mode = "cabinet" if mode == "cabinet" else "tele"
         # Attendre la fin des threads de la consultation précédente avant de
         # ré-armer stop_event (sinon ils survivraient au clear et doubleraient
         # la capture/transcription).
@@ -2104,16 +2260,18 @@ class Api:
         self._saved_annexes   = []
         self._saved_is_docx   = False
 
-        result = self.start(mic_name, output_name)
+        result = self.start(mic_name, output_name, self._mode)
         if result.get("ok"):
             if self._main_win:
                 self._main_win.minimize()
             if self._overlay_win:
                 self._overlay_win.show()
                 self._overlay_win.restore()
-                # Réinitialise l'UI de l'overlay (chrono, transcript, état d'attente).
+                # Réinitialise l'UI de l'overlay (chrono, transcript, état
+                # d'attente) et lui transmet le mode courant.
                 try:
-                    self._overlay_win.evaluate_js("startConsultationUI()")
+                    self._overlay_win.evaluate_js(
+                        "startConsultationUI('%s')" % self._mode)
                 except Exception:
                     pass
         return result
@@ -2173,20 +2331,40 @@ class Api:
             try:
                 self._resume_status = "generating"
                 with self._lock:
+                    n0 = len(self._entries)
                     entries = list(self._entries)
+                # Mode cabinet : attribuer Médecin/Patient par analyse LLM du
+                # contenu AVANT la correction (les tours arrivent en
+                # « Conversation »). L'attribution peut scinder des tours →
+                # le nombre de lignes peut augmenter. Ordre : attribution →
+                # correction → résumé.
+                if self._mode == "cabinet":
+                    entries = correction.attribuer_locuteurs(entries)
                 # Passe de correction LLM globale : le résumé ET le .docx
                 # sont générés depuis le transcript corrigé.
                 entries = correction.corriger_transcript_complet(entries)
                 with self._lock:
-                    if len(entries) == len(self._entries):
+                    # Réécrire seulement si aucun nouveau segment n'est arrivé
+                    # entre-temps (sinon on écraserait de la parole récente).
+                    if entries and len(self._entries) == n0:
                         self._entries[:] = entries
+                # Le résumé ne se construit QUE sur les lignes fiables (attribuées
+                # Médecin/Patient). Les lignes douteuses « [?] » / « Conversation »
+                # restent dans le transcript annexe mais ne doivent JAMAIS être
+                # résumées : une info médicale non fiable dans le compte-rendu
+                # est le pire scénario possible.
                 transcript = "\n".join(
                     "[%s] %s : %s" % (h, LOCUTEUR_FICHIER.get(loc, loc), t)
-                    for h, loc, t in entries)
+                    for h, loc, t in entries
+                    if not correction.est_ligne_douteuse(loc, t))
                 texte = groq_summarize(transcript, GROQ_API_KEY)
                 self._resume_text   = texte
                 self._resume_status = "done" if texte else "error"
             except Exception:
+                # Un échec du résumé n'empêche jamais la sauvegarde : le .docx
+                # est déjà écrit avant cette étape (résumé optionnel).
+                _caplog.error("generate_resume worker: échec\n%s",
+                              traceback.format_exc())
                 self._resume_status = "error"
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2289,6 +2467,47 @@ class Api:
                                                resume_text or "")
             except Exception:
                 pass
+        return {"ok": True}
+
+    def finalize_cabinet_docx(self):
+        """Cabinet : garantit que le .docx porte les étiquettes Médecin/Patient
+        (attribution) et les termes corrigés, MÊME si le médecin décline le
+        résumé. Best-effort, en arrière-plan : le .docx existe déjà (labels
+        « Conversation »), cette étape l'améliore sans bloquer la fermeture.
+        La sauvegarde du travail ne dépend donc jamais du succès de l'IA."""
+        if self._mode != "cabinet":
+            return {"ok": True}
+        fp = getattr(self, "_saved_file_path", None)
+        if not fp or not getattr(self, "_saved_is_docx", False) or not self._infos:
+            return {"ok": True}
+        now = getattr(self, "_start_time", None) or datetime.datetime.now()
+        annexes = getattr(self, "_saved_annexes", []) or []
+        infos = self._infos
+        resume_txt = getattr(self, "_resume_text", None)
+        with self._lock:
+            n0 = len(self._entries)
+            entries = list(self._entries)
+
+        def worker():
+            try:
+                ent = entries
+                # Attribution déjà faite si aucune ligne « Conversation » brute ne
+                # subsiste (les résiduelles indécidables portent le marqueur « [?] »).
+                besoin = any(loc == "Conversation"
+                             and not (t or "").lstrip().startswith("[?]")
+                             for _, loc, t in ent)
+                if besoin:
+                    ent = correction.attribuer_locuteurs(ent)
+                    ent = correction.corriger_transcript_complet(ent)
+                    with self._lock:
+                        if ent and len(self._entries) == n0:
+                            self._entries[:] = ent
+                storage.ecrire_docx(fp, infos, now, resume_txt or None, ent,
+                                    annexes=annexes)
+            except Exception:
+                _caplog.error("finalize_cabinet_docx: %s", traceback.format_exc())
+
+        threading.Thread(target=worker, daemon=True).start()
         return {"ok": True}
 
     # ===== HISTORIQUE =========================================================

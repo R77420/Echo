@@ -378,9 +378,16 @@
 
         <div>
           <div class="section-title">Médecin</div>
-          <div class="field">
+          <div class="field" style="margin-bottom:14px;">
             <label class="field-label">Nom affiché</label>
             <input type="text" id="set-doctor" placeholder="Dr Dupont">
+          </div>
+          <div class="field">
+            <label class="field-label">Spécialité</label>
+            <div class="combo-wrap">
+              <input type="text" id="set-specialty" placeholder="Médecine générale" autocomplete="off">
+              <div class="combo-list hidden" id="set-specialty-list"></div>
+            </div>
           </div>
         </div>
 
@@ -534,6 +541,30 @@
   </div>
 </div>
 
+<!-- Modale : choix du type de consultation -->
+<div id="mode-modal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:560px;">
+    <div class="confirm-title">Type de consultation</div>
+    <div class="confirm-sub">Comment se déroule cette consultation ?</div>
+    <div class="mode-cards">
+      <button class="mode-card" data-mode="cabinet">
+        <span class="mode-emoji">🏥</span>
+        <span class="mode-title">Au cabinet</span>
+        <span class="mode-desc">Le patient est présent dans la pièce</span>
+      </button>
+      <button class="mode-card" data-mode="tele">
+        <span class="mode-emoji">🖥</span>
+        <span class="mode-title">Téléconsultation</span>
+        <span class="mode-desc">Consultation vidéo (Doctolib, etc.)</span>
+      </button>
+    </div>
+    <div id="mode-banner" class="banner banner-err hidden" style="margin-bottom:12px;"></div>
+    <div class="confirm-actions">
+      <button class="btn btn-secondary" id="mode-cancel">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Panneau profil flottant ──────────────────────────────── -->
 <div id="profile-overlay" class="profile-overlay hidden"></div>
 <div id="profile-panel" class="profile-panel hidden">
@@ -640,7 +671,7 @@ onReady(async () => {
     return;
   }
 
-  setDoctorIdentity(state.doctor_name || '');
+  setDoctorIdentity(state.doctor_name || '', state.specialty || '');
   await loadHome();
   navigate('home');
 
@@ -683,60 +714,55 @@ const SPECIALITES = [
   'Sage-femme', 'Infirmier(ère) en pratique avancée',
 ];
 
-let _spItems = [];   // suggestions affichées
-let _spSel   = -1;   // index surligné
+/* Combobox réutilisable : câble un champ + sa liste. Utilisé à l'inscription
+   (auth-specialty) et dans les Paramètres (set-specialty). Renvoie un objet
+   avec close() pour usage externe. */
+function setupSpecialtyCombo(inputId, listId) {
+  const input = $(inputId), box = $(listId);
+  let items = [], sel = -1;
 
-function spClose() {
-  hide($('auth-specialty-list'));
-  _spItems = []; _spSel = -1;
-}
-
-function spPick(i) {
-  if (_spItems[i] === undefined) return;
-  $('auth-specialty').value = _spItems[i];
-  spClose();
-}
-
-function spRender() {
-  const box = $('auth-specialty-list');
-  box.innerHTML = '';
-  _spItems.forEach((s, i) => {
-    const div = document.createElement('div');
-    div.className = 'combo-item' + (i === _spSel ? ' sel' : '');
-    div.textContent = s;
-    // mousedown : se déclenche avant le blur du champ.
-    div.addEventListener('mousedown', e => { e.preventDefault(); spPick(i); });
-    box.appendChild(div);
-  });
-  if (_spItems.length) show(box); else hide(box);
-}
-
-function spFilter() {
-  const q = normalise($('auth-specialty').value.trim());
-  // Match sur n'importe quelle partie ("cardio" → Cardiologie).
-  _spItems = !q ? SPECIALITES.slice()
-                : SPECIALITES.filter(s => normalise(s).includes(q));
-  _spSel = -1;
-  spRender();
-}
-
-$('auth-specialty').addEventListener('focus', spFilter);
-$('auth-specialty').addEventListener('input', spFilter);
-$('auth-specialty').addEventListener('blur', () => setTimeout(spClose, 120));
-
-$('auth-specialty').addEventListener('keydown', e => {
-  const open = _spItems.length > 0;
-  if (e.key === 'ArrowDown' && open) {
-    e.preventDefault(); _spSel = (_spSel + 1) % _spItems.length; spRender();
-  } else if (e.key === 'ArrowUp' && open) {
-    e.preventDefault(); _spSel = (_spSel - 1 + _spItems.length) % _spItems.length; spRender();
-  } else if (e.key === 'Enter' && open && _spSel >= 0) {
-    e.preventDefault(); spPick(_spSel);
-  } else if (e.key === 'Escape' && open) {
-    e.stopPropagation(); spClose();
+  function close() { hide(box); items = []; sel = -1; }
+  function pick(i) { if (items[i] !== undefined) { input.value = items[i]; close(); } }
+  function render() {
+    box.innerHTML = '';
+    items.forEach((s, i) => {
+      const div = document.createElement('div');
+      div.className = 'combo-item' + (i === sel ? ' sel' : '');
+      div.textContent = s;
+      div.addEventListener('mousedown', e => { e.preventDefault(); pick(i); });
+      box.appendChild(div);
+    });
+    if (items.length) show(box); else hide(box);
   }
-  // Toute saisie hors liste reste acceptée telle quelle (aucune validation).
-});
+  function filter() {
+    const q = normalise(input.value.trim());
+    items = !q ? SPECIALITES.slice()
+               : SPECIALITES.filter(s => normalise(s).includes(q));
+    sel = -1;
+    render();
+  }
+  input.addEventListener('focus', filter);
+  input.addEventListener('input', filter);
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', e => {
+    const open = items.length > 0;
+    if (e.key === 'ArrowDown' && open) {
+      e.preventDefault(); sel = (sel + 1) % items.length; render();
+    } else if (e.key === 'ArrowUp' && open) {
+      e.preventDefault(); sel = (sel - 1 + items.length) % items.length; render();
+    } else if (e.key === 'Enter' && open && sel >= 0) {
+      e.preventDefault(); pick(sel);
+    } else if (e.key === 'Escape' && open) {
+      e.stopPropagation(); close();
+    }
+    // Saisie hors liste toujours acceptée (aucune validation bloquante).
+  });
+  return { close };
+}
+
+const _authSpecialtyCombo = setupSpecialtyCombo('auth-specialty', 'auth-specialty-list');
+setupSpecialtyCombo('set-specialty', 'set-specialty-list');
+function spClose() { _authSpecialtyCombo.close(); }
 
 $('btn-signup').addEventListener('click', async () => {
   const nom       = $('auth-name').value.trim();
@@ -783,7 +809,7 @@ $('btn-login').addEventListener('click', async () => {
   licenceValide = true;
   const state = await api('get_app_state');
   if (state && !state.onboarding_done) { navigate('onboarding-welcome'); return; }
-  if (state) setDoctorIdentity(state.doctor_name || '');
+  if (state) setDoctorIdentity(state.doctor_name || '', state.specialty || '');
   await loadHome();
   navigate('home');
   if (state && state.en_essai) showTrialBanner(state.jours_restants);
@@ -952,7 +978,7 @@ async function loadHome() {
 }
 
 /* Avatar médecin : initiales dérivées du nom (ex. "Dr Besma" → "DB"). */
-function setDoctorIdentity(nom) {
+function setDoctorIdentity(nom, specialite) {
   $('doctor-name').textContent = nom;
   const mots = nom.trim().split(/\s+/).filter(Boolean);  // « Dr Besma » → « DB »
   let ini;
@@ -960,6 +986,11 @@ function setDoctorIdentity(nom) {
   else if (mots.length === 1) ini = mots[0].slice(0, 2);
   else ini = '··';
   $('doctor-initials').textContent = ini.toUpperCase();
+  // Rôle sous le nom : spécialité si connue, sinon libellé par défaut.
+  if (specialite !== undefined) {
+    const roleEl = document.querySelector('.doc-role');
+    if (roleEl) roleEl.textContent = specialite || 'Médecin généraliste';
+  }
 }
 
 /* Cartes statistiques (calculées côté Python depuis consultations.json). */
@@ -1241,12 +1272,59 @@ $('delete-modal').addEventListener('click', e => {
 
 /* ---- Démarrage consultation ---- */
 
-$('btn-new-consult').addEventListener('click', async () => {
-  // Réinitialiser l'état du bouton Démarrer (resté disabled après une
-  // consultation précédente lancée avec succès).
+/* Nouveau flux : « + Nouvelle consultation » ouvre la modale de choix du
+   mode (Au cabinet / Téléconsultation). Le sélecteur de périphériques
+   n'apparaît qu'au tout premier usage (aucun périphérique en config) ; il
+   reste ensuite accessible uniquement dans Paramètres. */
+
+async function openConsultationFlow() {
+  const state = await api('get_app_state');
+  if (state && !state.devices_configured) {
+    // Premier usage : configurer les périphériques une seule fois.
+    openFirstUsePicker();
+  } else {
+    openModeModal(state && state.mode_consultation);
+  }
+}
+
+$('btn-new-consult').addEventListener('click', openConsultationFlow);
+
+/* ---- Modale de choix du mode ---- */
+
+function openModeModal(dernierMode) {
+  clearBanner($('mode-banner'));
+  // Présélection visuelle du dernier mode utilisé.
+  document.querySelectorAll('.mode-card').forEach(c =>
+    c.classList.toggle('preselected', c.dataset.mode === dernierMode));
+  show($('mode-modal'));
+}
+
+$('mode-cancel').addEventListener('click', () => hide($('mode-modal')));
+
+document.querySelectorAll('.mode-card').forEach(card => {
+  card.addEventListener('click', async () => {
+    const mode = card.dataset.mode;
+    document.querySelectorAll('.mode-card').forEach(c => c.style.pointerEvents = 'none');
+    clearBanner($('mode-banner'));
+    const res = await api('begin_consultation', mode);
+    document.querySelectorAll('.mode-card').forEach(c => c.style.pointerEvents = '');
+    if (res && res.ok) {
+      hide($('mode-modal'));
+    } else {
+      const b = $('mode-banner');
+      b.className = 'banner banner-err';
+      b.textContent = (res && res.error) || 'Impossible de démarrer la consultation.';
+      show(b);
+    }
+  });
+});
+
+/* ---- Sélecteur de périphériques (premier usage uniquement) ---- */
+
+async function openFirstUsePicker() {
   const btnStart = $('dp-start');
   btnStart.disabled = false;
-  btnStart.textContent = 'Démarrer la consultation';
+  btnStart.textContent = 'Continuer';
   clearBanner($('dp-banner'));
   show($('device-picker'));
   $('btn-new-consult').disabled = true;
@@ -1259,7 +1337,7 @@ $('btn-new-consult').addEventListener('click', async () => {
     populateSelect($('dp-output'), devs.outputs, devs.selected_output);
     populateSelect($('dp-mic'),    devs.mics,    devs.selected_mic);
   }
-});
+}
 
 $('dp-cancel').addEventListener('click', () => {
   hide($('device-picker'));
@@ -1269,20 +1347,22 @@ $('dp-cancel').addEventListener('click', () => {
 $('dp-start').addEventListener('click', async () => {
   const btn = $('dp-start');
   btn.disabled = true;
-  btn.textContent = 'Démarrage…';
+  btn.textContent = 'Enregistrement…';
   clearBanner($('dp-banner'));
-  const res = await api('begin_consultation', $('dp-mic').value, $('dp-output').value);
-  btn.textContent = 'Démarrer la consultation';
+  // Mémorise les périphériques choisis, puis passe au choix du mode.
+  const res = await api('save_settings',
+    { sortie: $('dp-output').value, micro: $('dp-mic').value });
+  btn.textContent = 'Continuer';
+  btn.disabled = false;
   if (res && res.ok) {
-    btn.disabled = false;
     hide($('device-picker'));
     $('btn-new-consult').disabled = false;
+    openModeModal('');
   } else {
     const b = $('dp-banner');
     b.className = 'banner banner-err';
-    b.textContent = (res && res.error) || 'Impossible de démarrer la consultation.';
+    b.textContent = 'Impossible d\'enregistrer les périphériques.';
     show(b);
-    btn.disabled = false;
   }
 });
 
@@ -1299,6 +1379,7 @@ async function loadSettings() {
   const s = await api('get_settings');
   if (!s) return;
   $('set-doctor').value = s.doctor_name  || '';
+  $('set-specialty').value = s.specialty || '';
   $('set-folder').value = s.save_folder  || '';
   // Sélectionne visuellement le bon bouton SANS rappeler applyTheme :
   // le thème est déjà actif (appliqué au démarrage via onReady).
@@ -1342,6 +1423,7 @@ $('btn-save-settings').addEventListener('click', async () => {
   $('btn-save-settings').disabled = true;
   const data = {
     doctor_name:  $('set-doctor').value.trim(),
+    specialty:    $('set-specialty').value.trim(),
     save_folder:  $('set-folder').value.trim(),
     gain_patient: parseInt($('set-gain-patient').value) / 100,
     gain_mic:     parseInt($('set-gain-mic').value)     / 100,
@@ -1354,7 +1436,8 @@ $('btn-save-settings').addEventListener('click', async () => {
   if (res && res.ok) {
     b.className = 'banner banner-ok';
     b.textContent = 'Paramètres enregistrés.';
-    $('doctor-name').textContent = data.doctor_name;
+    // Mise à jour immédiate partout : sidebar (nom + initiales + spécialité).
+    setDoctorIdentity(data.doctor_name || $('doctor-name').textContent, data.specialty);
   } else {
     b.className = 'banner banner-err';
     b.textContent = 'Erreur lors de l\'enregistrement.';

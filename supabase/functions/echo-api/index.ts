@@ -243,6 +243,35 @@ serve(async (req) => {
     )
   }
 
+  // ═══ MISE À JOUR SPÉCIALITÉ ═══
+  if (path === "/maj-specialite" && req.method === "POST") {
+    const { medecin_id, specialite } = await req.json()
+
+    if (!medecin_id) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "medecin_id manquant" }),
+        { status: 400, headers: corsHeaders }
+      )
+    }
+
+    const { error } = await supabase
+      .from("medecins")
+      .update({ specialite: specialite || "Médecin généraliste" })
+      .eq("id", medecin_id)
+
+    if (error) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Erreur mise à jour spécialité" }),
+        { status: 500, headers: corsHeaders }
+      )
+    }
+
+    return new Response(
+      JSON.stringify({ ok: true }),
+      { headers: corsHeaders }
+    )
+  }
+
   return new Response(
     JSON.stringify({ ok: false, erreur: "Route introuvable" }),
     { status: 404, headers: corsHeaders }

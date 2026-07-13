@@ -62,6 +62,7 @@
       <rect class="echo-bar" x="106" y="47" width="9" height="26" rx="4" fill="#5BB0FF"/>
     </svg>
     <span class="ov-title">Écho</span>
+    <span class="mode-badge hidden" id="mode-badge"></span>
     <span class="flex-1"></span>
     <div class="rec-badge">
       <span class="rec-dot2"></span>
@@ -98,6 +99,10 @@
     <div class="spk-btn spk-pat" id="spk-patient">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="2.5" y="13" width="4" height="7" rx="2"/><rect x="17.5" y="13" width="4" height="7" rx="2"/></svg>
       <span>Patient</span>
+    </div>
+    <div class="spk-btn spk-conv hidden" id="spk-conversation">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <span>🎙 Conversation en cours</span>
     </div>
     <button id="btn-quit" class="end-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-11"/></svg>
@@ -381,9 +386,11 @@ function addTurn(speaker, texte, ts, segId) {
     _lastTurn.sec = sec;
   } else {
     const div = document.createElement('div');
-    div.className = 'turn ' + (speaker === 'Medecin' ? 'med' : 'pat');
+    const cls = speaker === 'Medecin' ? 'med' : (speaker === 'Patient' ? 'pat' : 'conv');
+    const tag = speaker === 'Medecin' ? 'Médecin' : (speaker === 'Patient' ? 'Patient' : 'Conversation');
+    div.className = 'turn ' + cls;
     div.innerHTML =
-      '<div class="who"><span class="tag">' + (speaker === 'Medecin' ? 'Médecin' : 'Patient') +
+      '<div class="who"><span class="tag">' + tag +
         '</span><span class="ts">' + esc(hmFromTs(ts)) + '</span></div>' +
       '<div class="txt"></div>';
     div.querySelector('.txt').appendChild(segSpan(texte, segId));
@@ -432,13 +439,37 @@ function stopChrono() { if (_chronoTimer) { clearInterval(_chronoTimer); _chrono
 
 /* Initialise l'UI pour une nouvelle consultation (appelé par Python via
    evaluate_js dès begin_consultation, et au 1er chargement). Idempotent. */
-function startConsultationUI() {
+let _consultMode = 'tele';   // 'tele' ou 'cabinet'
+let _captureArretee = false; // capture figée au clic « Terminer »
+
+function startConsultationUI(mode) {
+  _consultMode = (mode === 'cabinet') ? 'cabinet' : 'tele';
+  _captureArretee = false;   // nouvelle consultation → réarmer l'arrêt
+  applyModeUI(_consultMode);
   _backupShown = false;
   resetTranscript();
   stopPolling();
   startPolling(items => items.forEach(handleUpdate), 200);
   startSpeakingPolling();
   startChrono();
+}
+
+/* Adapte l'overlay au mode : badge header + indicateur(s) du footer. */
+function applyModeUI(mode) {
+  const badge = $('mode-badge');
+  if (badge) {
+    badge.textContent = (mode === 'cabinet') ? 'Au cabinet' : 'Téléconsultation';
+    show(badge);
+  }
+  const cabinet = (mode === 'cabinet');
+  // Cabinet : un seul indicateur « Conversation ». Télé : Médecin + Patient.
+  $('spk-medecin').classList.toggle('hidden', cabinet);
+  $('spk-patient').classList.toggle('hidden', cabinet);
+  $('spk-conversation').classList.toggle('hidden', !cabinet);
+  const hint = document.querySelector('.wait-hint');
+  if (hint) hint.textContent = cabinet
+    ? 'La conversation est captée par le micro — parlez normalement'
+    : 'Appuyez sur Médecin ou Patient pour lancer la consultation';
 }
 
 /* ------------------------------------------------------------------ */
@@ -452,7 +483,9 @@ onReady(async () => {
   // L'overlay est lancé APRÈS begin_consultation(), donc on passe direct.
   show($('view-main'));
   isActive = true;
-  startConsultationUI();          // reset + chrono + polling (idempotent)
+  // Mode par défaut = dernier utilisé (Python le confirme ensuite via
+  // startConsultationUI(mode) au lancement effectif de la consultation).
+  startConsultationUI(state && state.mode_consultation);
   // Charger les péri pour le panneau settings.
   loadSettingsPanel();
 });
@@ -530,14 +563,20 @@ function startSpeakingPolling() {
   stopSpeakingPolling();
   const bM = $('spk-medecin');
   const bP = $('spk-patient');
+  const bC = $('spk-conversation');
   (async function loop() {
     const s = await api('get_speaking_status');
     if (s && s.active) {
-      bM.classList.toggle('active', !!s.medecin);
-      bP.classList.toggle('active', !!s.patient);
+      if (_consultMode === 'cabinet') {
+        bC.classList.toggle('active', !!s.conversation);
+      } else {
+        bM.classList.toggle('active', !!s.medecin);
+        bP.classList.toggle('active', !!s.patient);
+      }
     } else {
       bM.classList.remove('active');
       bP.classList.remove('active');
+      bC.classList.remove('active');
     }
     _vuTimer = setTimeout(loop, 120);
   })();
@@ -545,9 +584,9 @@ function startSpeakingPolling() {
 
 function stopSpeakingPolling() {
   if (_vuTimer !== null) { clearTimeout(_vuTimer); _vuTimer = null; }
-  const bM = $('spk-medecin'), bP = $('spk-patient');
-  if (bM) bM.classList.remove('active');
-  if (bP) bP.classList.remove('active');
+  ['spk-medecin','spk-patient','spk-conversation'].forEach(id => {
+    const el = $(id); if (el) el.classList.remove('active');
+  });
 }
 
 async function loadSettingsPanel() {
@@ -591,15 +630,23 @@ $('btn-quit').addEventListener('click', () => initiateQuit());
 /** Appelé aussi depuis Python (intercepte la croix Windows). */
 function handleWindowClose() { initiateQuit(); }
 
-function initiateQuit() {
-  const t = $('transcript');
-  const hasEntries = t && t.querySelector('.turn') !== null;
-  if (hasEntries) {
-    show($('modal-confirm'));
-  } else {
-    // Rien à sauver → fermer directement.
-    doClose();
+async function initiateQuit() {
+  // Arrêt IMMÉDIAT de la capture dès le clic « Terminer » : plus aucun segment
+  // audio n'est capturé pendant que le médecin remplit le formulaire (sinon le
+  // bruit/silence de bureau produit des segments hallucinés qui polluent le
+  // transcript). On fige d'abord, on affiche la confirmation ensuite.
+  if (!_captureArretee) {
+    _captureArretee = true;
+    stopPolling();
+    stopSpeakingPolling();
+    stopChrono();
+    const items = await api('arreter_capture');   // stop_event + purge côté Python
+    if (Array.isArray(items)) items.forEach(handleUpdate);  // rendu final figé
   }
+  // Toujours proposer d'enregistrer : le médecin doit pouvoir consigner le
+  // patient même si le transcript est vide ou très court (consultation muette,
+  // captation partielle…). Il garde le choix « Quitter sans enregistrer ».
+  show($('modal-confirm'));
 }
 
 $('conf-save').addEventListener('click', () => {
@@ -745,6 +792,9 @@ async function submitPatient() {
    Le document est déjà enregistré quand cette modale s'affiche. */
 $('ask-resume-no').addEventListener('click', async () => {
   hide($('modal-ask-resume'));
+  // Cabinet : appliquer l'attribution des locuteurs au .docx même sans résumé
+  // (best-effort, non bloquant — le document est déjà enregistré).
+  if (_consultMode === 'cabinet') await api('finalize_cabinet_docx');
   await doClose();
 });
 $('ask-resume-yes').addEventListener('click', () => {
@@ -785,6 +835,9 @@ function pollResumeStatus() {
 /* ── Résumé prêt : ajouter au document, ou ignorer ── */
 $('res-cancel').addEventListener('click', async () => {   // « Ignorer »
   hide($('modal-resume'));
+  // Cabinet : le résumé a été généré (donc l'attribution aussi), mais le .docx
+  // n'a pas été réécrit → le faire ici pour y porter les étiquettes.
+  if (_consultMode === 'cabinet') await api('finalize_cabinet_docx');
   await doClose();
 });
 $('res-validate').addEventListener('click', async () => { // « Ajouter au document »
