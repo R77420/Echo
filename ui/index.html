@@ -347,7 +347,8 @@ function secFromTs(ts) {
 
 function appendEntry(item) {
   const type = item.type || 'INFO';
-  if (type === 'Medecin' || type === 'Patient') {
+  // Medecin/Patient (télé) et Conversation (cabinet, un seul locuteur capté).
+  if (type === 'Medecin' || type === 'Patient' || type === 'Conversation') {
     addTurn(type, item.texte, item.timestamp, item.seg_id);
   } else if (type === 'CORRECTION') {
     applyCorrection(item.seg_id, item.texte);
