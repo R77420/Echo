@@ -160,3 +160,53 @@ def test_save_settings_specialite_backend(monkeypatch):
     assert appels == [("maj-specialite",
                        {"medecin_id": "med-9", "specialite": "Neurologie"})]
     assert cfg_store["specialty"] == "Neurologie"
+
+
+# ------------------------------------------------ calibrage adaptatif RMS cabinet
+
+import numpy as np
+
+class _FakeRec:
+    """Recorder factice : renvoie des blocs à un RMS constant donné."""
+    def __init__(self, rms_cible):
+        self.rms = rms_cible
+    def record(self, numframes):
+        # signal constant dont le RMS vaut exactement self.rms
+        return np.full((numframes, 1), self.rms, dtype=np.float32)
+
+
+def test_calibrage_cabinet_calme(monkeypatch):
+    tc.stop_event.clear()
+    # Cabinet calme : bruit ambiant très faible → seuil = plancher.
+    seuil = tc._calibrer_seuil_cabinet(_FakeRec(0.001), tc.RMS_MIN_CABINET)
+    assert seuil == tc.CABINET_RMS_FLOOR
+
+
+def test_calibrage_cabinet_moyen(monkeypatch):
+    tc.stop_event.clear()
+    # Bruit ambiant 0.005 → seuil = 0.005 × 2.5 = 0.0125 (entre plancher/plafond).
+    seuil = tc._calibrer_seuil_cabinet(_FakeRec(0.005), tc.RMS_MIN_CABINET)
+    assert abs(seuil - 0.005 * tc.CABINET_RMS_FACTOR) < 1e-6
+    assert tc.CABINET_RMS_FLOOR <= seuil <= tc.CABINET_RMS_CEIL
+
+
+def test_calibrage_cabinet_bruyant(monkeypatch):
+    tc.stop_event.clear()
+    # Cabinet bruyant : bruit ambiant élevé → seuil plafonné.
+    seuil = tc._calibrer_seuil_cabinet(_FakeRec(0.05), tc.RMS_MIN_CABINET)
+    assert seuil == tc.CABINET_RMS_CEIL
+
+
+# ------------------------------------------------ filtre de confiance no_speech
+
+def test_no_speech_seuil_defini():
+    # Backstop conservateur : bien au-dessus de la parole (~0.002) pour ne pas
+    # rejeter la voix distante, tout en coupant le non-parole franc.
+    assert 0.4 <= tc.NO_SPEECH_MAX <= 0.75
+    assert tc.NO_SPEECH_MAX > 0.002      # parole toujours conservée
+
+
+def test_no_speech_filtre_worker_logique():
+    # Vérifie la décision de rejet : no_speech au-dessus du seuil → rejeté.
+    for nsp, rejete in [(0.002, False), (0.3, False), (0.7, True), (0.95, True)]:
+        assert (nsp is not None and nsp > tc.NO_SPEECH_MAX) == rejete

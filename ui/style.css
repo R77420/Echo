@@ -802,6 +802,112 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 [data-theme="dark"] .mode-card { background: #16271f; border-color: rgba(255,255,255,0.1); }
 .mode-card:hover { border-color: var(--accent); background: var(--accent-lt); transform: translateY(-2px); }
 [data-theme="dark"] .mode-card:hover { background: var(--accent-lt); }
+
+/* Écran de validation du compte-rendu (cases à cocher) */
+.vcr-cat { margin-bottom: 20px; }
+.vcr-cat-title {
+  font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--txt-secondary); margin-bottom: 8px;
+}
+.vcr-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: var(--r-sm); margin-bottom: 6px; background: var(--bg-card);
+}
+.vcr-item.unchecked { opacity: 0.5; }
+.vcr-item input[type="checkbox"] {
+  width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--accent);
+  cursor: pointer;
+}
+.vcr-item .vcr-text {
+  flex: 1; border: none; background: transparent; color: var(--txt-primary);
+  font-family: inherit; font-size: 14px; padding: 2px 4px; outline: none;
+  border-radius: 4px;
+}
+.vcr-item .vcr-text:focus { background: var(--accent-lt); }
+.vcr-del {
+  border: none; background: transparent; color: var(--txt-secondary);
+  cursor: pointer; padding: 4px; border-radius: 4px; flex-shrink: 0;
+  display: flex; align-items: center;
+}
+.vcr-del:hover { color: var(--danger); background: var(--bg-hover, rgba(0,0,0,0.05)); }
+.vcr-add {
+  width: 100%; border: 1px dashed var(--border); background: transparent;
+  color: var(--txt-secondary); font-family: inherit; font-size: 13.5px;
+  padding: 8px 12px; border-radius: var(--r-sm); outline: none;
+}
+.vcr-add:focus { border-color: var(--accent); color: var(--txt-primary); }
+.vcr-spinner {
+  width: 15px; height: 15px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: vcr-spin 0.8s linear infinite;
+}
+@keyframes vcr-spin { to { transform: rotate(360deg); } }
+
+/* Badge « à valider » (historique) et bandeau accueil */
+.badge-avalider {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: #FDF3E2; color: #A8690F; border: 1px solid #EED9B8;
+  flex-shrink: 0; margin-left: 8px;
+}
+[data-theme="dark"] .badge-avalider { background: #3a2d10; color: #f0c674; border-color: #5a4a20; }
+.cr-pending-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: var(--r-md); margin-bottom: 16px;
+  background: #FDF3E2; color: #A8690F; border: 1px solid #EED9B8;
+  font-size: 13.5px; cursor: pointer;
+}
+[data-theme="dark"] .cr-pending-banner { background: #3a2d10; color: #f0c674; border-color: #5a4a20; }
+
+/* Bloc compte-rendu (fiche consultation) — le contenu dominant */
+.cr-box {
+  background: var(--bg-card);
+  border: 1px solid var(--card-hover);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-card);
+}
+.cr-box-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+}
+.cr-box-title {
+  font-size: 13px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--txt-primary); flex: 1;
+}
+.cr-box-status { font-size: 12px; font-weight: 600; }
+.cr-box-status.valide { color: var(--accent); }
+.cr-box-status.attente { color: var(--warn); }
+.cr-cat-block { margin-bottom: 14px; }
+.cr-cat-block:last-child { margin-bottom: 0; }
+.cr-cat-name {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 5px;
+}
+.cr-cat-block ul { margin: 0; padding-left: 18px; }
+.cr-cat-block li {
+  font-size: 14px; line-height: 1.7; color: var(--txt-primary);
+}
+.cr-empty { font-size: 13px; color: var(--txt-secondary); font-style: italic; }
+
+/* Tableau patient compact */
+.info-table-compact td { padding: 5px 10px !important; font-size: 13px !important; }
+
+/* Champ « + Ajouter » avec bouton + (ajout multiple) */
+.vcr-add-row { display: flex; gap: 8px; align-items: center; }
+.vcr-add-row .vcr-add { flex: 1; }
+.vcr-add-btn {
+  width: 34px; height: 34px; flex-shrink: 0;
+  border: none; border-radius: var(--r-sm);
+  background: var(--accent); color: #fff;
+  font-size: 18px; font-weight: 700; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background var(--t), opacity var(--t);
+}
+.vcr-add-btn:hover:not(:disabled) { background: var(--accent-hov); }
+.vcr-add-btn:disabled { opacity: 0.35; cursor: default; }
+
+
 .mode-card.preselected { border-color: var(--accent); }
 .mode-emoji { font-size: 34px; line-height: 1; }
 .mode-title { font-size: 15px; font-weight: 600; color: var(--txt-primary); }

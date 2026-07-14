@@ -361,3 +361,77 @@ def test_enumeration_medicale_legitime_conservee():
     # Longue énumération MAIS avec verbe → gardée (pas de faux positif).
     assert not tc.est_hallucination_generique(
         "depuis trois jours j'ai de la toux, de la fièvre, des courbatures, et des maux de tête")
+
+
+# ------------------------------------------------ charabia mots inconnus
+
+def test_est_charabia_mots_inventes():
+    # ≥ 3 mots longs, aucun français reconnu → charabia.
+    assert correction._est_charabia("préimbant animationnel wxcvbn")
+    assert correction._est_charabia("xyzabc qwerty zzzzzz")
+
+
+def test_est_charabia_conservateur_deux_mots():
+    # Seulement 2 mots longs inconnus → PAS classé charabia (conservateur ;
+    # ce cas est attrapé en amont par le RMS adaptatif / no_speech_prob).
+    assert not correction._est_charabia("préimbant l'animationnel")
+
+
+def test_est_charabia_francais_reel_conserve():
+    # De vraies phrases FR ne doivent jamais être considérées charabia.
+    for phrase in [
+        "je vous prescris du Doliprane trois fois par jour",
+        "bonjour docteur comment allez-vous aujourd'hui",
+        "j'ai des douleurs au ventre depuis hier",
+        "prenez ce traitement pendant une semaine",
+        "un passage que le médecin n'a pas su classer facilement",
+    ]:
+        assert not correction._est_charabia(phrase), phrase
+
+
+def test_est_charabia_un_mot_connu_suffit():
+    # Un seul mot français reconnu → considéré plausible (conservateur).
+    assert not correction._est_charabia("bonjour blarg zzzzz frbtn")
+
+
+def test_conversation_residuelle_charabia_supprimee():
+    entries = [
+        ("10:00:00", "Patient", "j'ai mal à la gorge"),
+        ("10:00:05", "Conversation", "préimbant animationnel wxcvbn qwerty"),
+    ]
+    res = correction._nettoyer_conversation_residuelle(entries)
+    assert len(res) == 1                       # charabia supprimé
+    assert res[0][1] == "Patient"
+
+
+def test_conversation_residuelle_francais_marquee_pas_supprimee():
+    # Une ligne FR non attribuée reste (marquée [?]), pas supprimée.
+    entries = [
+        ("10:00:05", "Conversation", "je pense que cela ira beaucoup mieux demain"),
+    ]
+    res = correction._nettoyer_conversation_residuelle(entries)
+    assert len(res) == 1
+    assert res[0][2].startswith("[?] ")
+
+
+# ------------------------------------------------ [HORS-SUJET]
+
+def test_hors_sujet_traite_comme_douteux(monkeypatch):
+    """Une ligne étiquetée HORS-SUJET par le LLM reste 'Conversation',
+    marquée [?] (annexe) et exclue du résumé — jamais Médecin/Patient."""
+    entries = [
+        ("10:00:00", "Conversation", "j'ai mal à la gorge depuis hier"),
+        ("10:00:08", "Conversation", "je vous recommande de faire des recherches sur les produits de la société"),
+    ]
+    sortie = ("[10:00:00] PATIENT : j'ai mal à la gorge depuis hier\n"
+              "[10:00:08] HORS-SUJET : je vous recommande de faire des recherches sur les produits de la société")
+    monkeypatch.setattr(correction, "_client", _mock_client_retour(sortie))
+    res = correction.attribuer_locuteurs(entries)
+    assert len(res) == 2
+    assert res[0][1] == "Patient"
+    # HORS-SUJET → Conversation marquée [?]
+    assert res[1][1] == "Conversation"
+    assert res[1][2].startswith("[?] ")
+    # Et exclue du résumé
+    assert correction.est_ligne_douteuse(res[1][1], res[1][2])
+    assert not correction.est_ligne_douteuse(res[0][1], res[0][2])

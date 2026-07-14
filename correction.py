@@ -69,6 +69,10 @@ SYSTEM_PROMPT_LOCUTEURS = (
     "- Ne modifie AUCUN mot ni horodatage : uniquement l'étiquette et, si besoin, "
     "la coupure entre deux locuteurs\n"
     "- Si tu ne peux pas trancher pour une ligne, garde l'étiquette Conversation\n"
+    "- Si une réplique est manifestement hors-sujet par rapport à une "
+    "consultation médicale (publicité, phrase générique sans lien avec la "
+    "santé, contenu incohérent avec le reste de l'échange), remplace son "
+    "étiquette par HORS-SUJET au lieu de MEDECIN/PATIENT\n"
     "Exemple. Entrée :\n"
     "[09:00:01] Conversation : j'ai mal à la gorge\n"
     "[09:00:09] Conversation : je vous examine. Ça pique quand vous avalez ?\n"
@@ -184,7 +188,10 @@ def contient_bascule_anglaise(texte):
 def _mapper_locuteur(brut):
     """Mappe l'étiquette renvoyée par le LLM vers le libellé interne.
     « MÉDECIN/Médecin/medecin… » → "Medecin", « PATIENT… » → "Patient".
-    Non reconnu → None (on garde alors l'étiquette d'origine)."""
+    « HORS-SUJET » (hallucination cohérente détectée par incohérence
+    thématique) et tout libellé non reconnu → None : la ligne reste
+    « Conversation », donc marquée « [?] » dans l'annexe et EXCLUE du
+    résumé (est_ligne_douteuse)."""
     n = "".join(c for c in brut.lower() if c.isalpha())
     # sans accents
     n = (n.replace("é", "e").replace("è", "e").replace("ê", "e"))
@@ -207,15 +214,102 @@ def est_ligne_douteuse(loc, texte):
     return loc == "Conversation" or (texte or "").lstrip().startswith("[?]")
 
 
+# Lexique français courant (mots > 4 lettres). Sert à repérer un charabia :
+# une ligne dont AUCUN mot long n'est reconnu est probablement une hallucination
+# Whisper (« préimbant l'animationnel »). Volontairement restreint aux mots très
+# fréquents + vocabulaire de consultation — on ne l'utilise QUE sur les lignes
+# résiduelles « Conversation » (déjà non attribuées) pour ne jamais rejeter un
+# terme médical d'une réplique attribuée.
+_LEXIQUE_FR = {
+    # liaisons / pronoms / déterminants longs
+    "votre", "notre", "leurs", "elles", "nous", "vous", "cette", "cela",
+    "comme", "aussi", "alors", "quand", "parce", "pour", "avec", "sans",
+    "dans", "chez", "mais", "donc", "puis", "très", "trop", "plus", "moins",
+    "bien", "encore", "toujours", "jamais", "aujourd", "hier", "demain",
+    "peut", "faut", "veux", "veut", "dois", "doit", "pouvez", "devez",
+    "quel", "quelle", "quels", "quelles", "lequel", "laquelle", "autre",
+    "autres", "chaque", "plusieurs", "certains", "certaines", "même",
+    "mêmes", "tout", "toute", "toutes", "quelqu", "personne", "rien",
+    # verbes fréquents (formes courantes)
+    "avez", "avons", "êtes", "sont", "était", "étaient", "avait", "avaient",
+    "aller", "allez", "allons", "faire", "faites", "faisons", "prendre",
+    "prenez", "prends", "donner", "donnez", "donne", "voir", "vois", "voit",
+    "voyez", "savoir", "sais", "sait", "savez", "penser", "pense", "pensez",
+    "trouve", "trouver", "trouvez", "sentir", "sens", "sent", "sentez",
+    "ressens", "ressent", "revoir", "revenir", "revenez", "reviens",
+    "rester", "reste", "restez", "continuer", "continue", "continuez",
+    "arrêter", "arrête", "arrêtez", "commencer", "commence", "commencez",
+    "regarder", "regarde", "regardez", "respirez", "respirer", "respire",
+    "avaler", "avale", "avalez", "examine", "examiner", "examinez",
+    "prescris", "prescrit", "prescrire", "expliquer", "explique",
+    "expliquez", "parler", "parle", "parlez", "dire", "dites", "disons",
+    "vouloir", "pouvoir", "devoir", "falloir", "mettre", "mettez", "mets",
+    "passer", "passe", "passez", "passage", "classer", "classe", "porter",
+    "porte", "arriver", "arrive", "arrivez", "changer", "change", "montrer",
+    "montre", "montrez", "essayer", "essaye", "essayez", "aider", "aide",
+    "aidez", "appeler", "appelle", "appelez", "attendre", "attendez",
+    "attend", "entendre", "entends", "entend", "comprendre", "comprends",
+    "comprend", "boire", "buvez", "manger", "mange", "mangez", "dormir",
+    "dors", "dort", "dormez", "marcher", "marche", "marchez", "tenir",
+    "tiens", "tient", "tenez", "vivre", "vivez", "devenir", "devient",
+    # salutations / politesse
+    "bonjour", "bonsoir", "revoir", "merci", "madame", "monsieur",
+    "mademoiselle", "docteur", "excusez", "voilà", "accord", "comment",
+    "pourquoi", "sûr", "évidemment", "effectivement", "certainement",
+    "peut", "être", "vraiment", "surtout", "plutôt", "assez", "environ",
+    # corps / symptômes / consultation
+    "douleur", "douleurs", "gorge", "tête", "ventre", "poitrine",
+    "jambe", "jambes", "bras", "bouche", "oreille", "oreilles", "estomac",
+    "coeur", "poumon", "poumons", "muscle", "muscles", "articulation",
+    "fièvre", "toux", "fatigue", "nausée", "nausées", "vertige", "vertiges",
+    "migraine", "rhume", "angine", "grippe", "allergie", "tension",
+    "essoufflement", "vomissement", "vomissements", "diarrhée", "constipation",
+    "insomnie", "stress", "anxiété", "dépression", "infection", "inflammation",
+    "matin", "soir", "midi", "nuit", "jour", "jours", "semaine", "semaines",
+    "mois", "année", "années", "heure", "heures", "minute", "minutes",
+    "gramme", "grammes", "milligramme", "comprimé", "comprimés", "gélule",
+    "gélules", "sirop", "goutte", "gouttes", "dose", "doses",
+    "ordonnance", "prescription", "traitement", "traitements", "médicament",
+    "médicaments", "antibiotique", "antibiotiques", "vaccin", "analyse",
+    "analyses", "examen", "examens", "radio", "scanner", "prise", "sang",
+    "patient", "patiente", "médecin", "consultation", "rendez", "hôpital",
+    "clinique", "cabinet", "urgences", "spécialiste", "généraliste",
+    # temps / quantités / adverbes fréquents
+    "pendant", "depuis", "avant", "après", "beaucoup", "petit", "petite",
+    "grande", "grand", "mieux", "quelque", "quelques", "chose", "choses",
+    "besoin", "problème", "problèmes", "question", "questions", "réponse",
+    "gauche", "droite", "dernier", "dernière", "prochain", "prochaine",
+    "normal", "normale", "possible", "difficile", "facile", "important",
+    "importante", "sérieux", "grave", "léger", "légère", "fort", "forte",
+    "moment", "moments", "endroit", "côté", "niveau", "genre", "façon",
+    "manière", "raison", "exemple", "situation", "travail", "maison",
+    "famille", "enfant", "enfants", "personnes", "gens", "monde",
+}
+
+
+def _est_charabia(texte):
+    """Vrai si le texte est un charabia PROBABLE : au moins 3 mots de plus de
+    4 lettres et AUCUN reconnu dans le lexique français courant. Volontairement
+    strict (≥ 3 mots, 0 reconnu) — un seul mot français plausible ou moins de
+    3 mots longs suffit à conserver la ligne, pour ne pas supprimer du vrai
+    français à cause d'un lexique forcément incomplet."""
+    mots = re.findall(r"[a-zàâäéèêëïîôöùûüç]+", (texte or "").lower())
+    longs = [m for m in mots if len(m) > 4]
+    if len(longs) < 3:
+        return False
+    connus = sum(1 for m in longs if m in _LEXIQUE_FR)
+    return connus == 0
+
+
 def _nettoyer_conversation_residuelle(entries):
     """Règle (b) : après attribution, une ligne restée « Conversation » (que le
-    LLM n'a pas su trancher) est suspecte. Si elle contient une bascule anglaise
-    → supprimée (charabia). Sinon → conservée mais préfixée « [?] » pour signaler
-    au médecin un passage douteux."""
+    LLM n'a pas su trancher) est suspecte. Supprimée si bascule anglaise OU
+    charabia (aucun mot français reconnu). Sinon → conservée mais préfixée
+    « [?] » pour signaler au médecin un passage douteux."""
     final = []
     for h, loc, t in entries:
         if loc == "Conversation":
-            if contient_bascule_anglaise(t):
+            if contient_bascule_anglaise(t) or _est_charabia(t):
                 continue                       # charabia → supprimé
             if not t.lstrip().startswith("[?]"):
                 t = "[?] " + t                 # douteux → marqué

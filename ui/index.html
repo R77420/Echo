@@ -921,8 +921,10 @@ async function doInitialSave(annexes) {
   // Sauvegarde sans résumé (résumé = '').
   const saveRes = await api('perform_save', fileRes.path, '', annexes);
   if (saveRes && saveRes.ok) {
-    // Document enregistré : proposer le résumé (non bloquant).
-    show($('modal-ask-resume'));
+    // Document enregistré. L'extraction du compte-rendu tourne côté Python ;
+    // l'écran de validation (cases à cocher) s'ouvre dans la fenêtre
+    // principale à la fermeture de l'overlay.
+    await doClose();
   } else {
     // Erreur : on l'affiche et on reste dans l'appli.
     show($('view-main'));

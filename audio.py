@@ -24,10 +24,17 @@ VAD_LEVEL          = 2          # 0 (permissif) .. 3 (agressif) — niveau 2 pou
 SILENCE_MS         = 350        # silence marquant la fin d'un tour de parole (télé)
 SILENCE_MS_CABINET = 250        # cabinet : échanges plus rapides (pas de latence réseau) → couper plus tôt sépare mieux les locuteurs
 MIN_SPEECH_MS      = 300        # ignore les bruits trop courts (réduit pour capturer parole courte)
+MIN_SPEECH_MS_CABINET = 400     # cabinet : un vrai échange dure ≥ 0.5 s → élimine les micro-bruits brefs
 RMS_MIN            = 0.008      # énergie minimale globale (assoupli)
 RMS_MIN_LOOPBACK   = 0.006      # seuil loopback : audio compressé/normalisé a un RMS plus bas
 RMS_MIN_MIC        = 0.015      # seuil micro (télé) : médecin près du casque, strict contre l'écho
-RMS_MIN_CABINET    = 0.005      # seuil micro (cabinet) : deux locuteurs à distance variable du micro
+RMS_MIN_CABINET    = 0.005      # seuil micro (cabinet) : repli si le calibrage adaptatif échoue
+# Calibrage adaptatif du seuil cabinet : mesure du bruit ambiant × facteur,
+# borné entre un plancher et un plafond. S'adapte au cabinet calme ou bruyant.
+CABINET_CALIB_MS     = 2000     # durée de mesure du bruit ambiant en début de consultation
+CABINET_RMS_FACTOR   = 2.5      # seuil = bruit_ambiant × facteur
+CABINET_RMS_FLOOR    = 0.008    # plancher (cabinet très calme)
+CABINET_RMS_CEIL     = 0.020    # plafond (cabinet très bruyant)
 MAX_SEG_MS         = 4000       # flush forcé : un segment au moins toutes les 4 s
 
 

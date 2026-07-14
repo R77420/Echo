@@ -280,6 +280,9 @@
       <button class="trial-close" id="trial-close" title="Fermer">✕</button>
     </div>
 
+    <!-- Comptes-rendus en attente de validation -->
+    <div id="cr-pending" class="cr-pending-banner hidden"></div>
+
     <!-- Statistiques -->
     <div class="stats-grid" id="stats-grid"></div>
 
@@ -350,6 +353,30 @@
     </div>
     <div class="section flex-1" style="overflow-y:auto;">
       <div class="consult-timeline" id="pd-consult-list"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : VALIDATION DU COMPTE-RENDU (cases à cocher)
+       ═══════════════════════════════════════════════ -->
+  <div data-view="validate-cr" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header">
+      <div class="page-title">Valider le compte-rendu</div>
+      <div class="page-subtitle" id="vcr-sub">L'IA propose, vous décidez — seuls les éléments cochés iront au compte-rendu.</div>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="max-width:680px;display:flex;flex-direction:column;gap:22px;">
+        <div id="vcr-loading" class="hidden" style="display:flex;align-items:center;gap:10px;color:var(--txt-secondary);font-size:14px;">
+          <span class="vcr-spinner"></span> Analyse de la consultation en cours…
+        </div>
+        <div id="vcr-sections"></div>
+        <div id="vcr-banner" class="banner banner-err hidden"></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;padding-bottom:24px;">
+          <button class="btn btn-primary" id="vcr-validate" style="padding:11px 18px;">✓ Valider et enregistrer</button>
+          <button class="btn btn-secondary" id="vcr-later">Valider plus tard</button>
+          <button class="btn btn-secondary" id="vcr-skip" style="color:var(--danger);border-color:var(--danger);">Ignorer le compte-rendu</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -461,24 +488,29 @@
     <div class="section flex-1" style="overflow-y:auto;">
       <div style="max-width:720px;margin:0 auto;width:100%;display:flex;flex-direction:column;gap:24px;">
 
-        <!-- Infos patient -->
-        <div>
-          <div class="section-title">Patient</div>
-          <div class="card">
-            <table class="info-table" id="detail-patient-table"></table>
+        <!-- COMPTE-RENDU : le contenu principal, en tête de fiche -->
+        <div id="detail-summary-wrap">
+          <div class="cr-box">
+            <div class="cr-box-head">
+              <span class="cr-box-title">Compte-rendu</span>
+              <span class="cr-box-status" id="detail-cr-status"></span>
+              <button class="btn btn-secondary btn-sm" id="detail-cr-edit">Modifier le compte-rendu</button>
+            </div>
+            <div id="detail-summary"></div>
           </div>
         </div>
 
-        <!-- Résumé -->
-        <div id="detail-summary-wrap">
-          <div class="section-title">Résumé de la consultation</div>
-          <div class="card" style="padding:18px;font-size:14px;line-height:1.7;
-               color:var(--txt-primary);white-space:pre-wrap;" id="detail-summary"></div>
+        <!-- Infos patient (compact, sous le compte-rendu) -->
+        <div>
+          <div class="section-title">Patient</div>
+          <div class="card">
+            <table class="info-table info-table-compact" id="detail-patient-table"></table>
+          </div>
         </div>
 
         <!-- Fichier -->
         <div>
-          <div class="section-title">Compte-rendu</div>
+          <div class="section-title">Document Word</div>
           <div class="card" style="padding:16px 20px;">
             <div id="detail-file-path"
                  style="font-size:13px;color:var(--txt-secondary);
@@ -974,7 +1006,19 @@ async function loadHome() {
   }
   await loadStats();
   await loadConsultations();
+  await loadCrPending();
   checkForUpdate();
+}
+
+/* Bandeau « X comptes-rendus à valider » (accueil). */
+async function loadCrPending() {
+  const el = $('cr-pending');
+  const p = await api('get_cr_a_valider');
+  if (!p || !p.count) { hide(el); return; }
+  const s = p.count > 1 ? 's' : '';
+  el.textContent = '⚠ ' + p.count + ' compte' + s + '-rendu' + s + ' à valider — cliquez pour reprendre';
+  el.onclick = () => openValidationScreen(p.dernier_id);
+  show(el);
 }
 
 /* Avatar médecin : initiales dérivées du nom (ex. "Dr Besma" → "DB"). */
@@ -1119,6 +1163,7 @@ function renderConsultations(items) {
     }
     const nom   = ((p.nom||'') + ' ' + (p.prenom||'')).trim() || '—';
     const motif = p.motif || '—';
+    const aValider = (c.cr_valide === false);
     const card  = document.createElement('div');
     card.className = 'consult';
     card.dataset.id = c.id;
@@ -1126,12 +1171,15 @@ function renderConsultations(items) {
       '<div class="time-rail"><span class="hm">' + esc(timeHM(c.date)) + '</span>' +
         '<span class="dur">' + (c.duration_min ? esc(c.duration_min + ' min') : '') + '</span></div>' +
       '<div class="av av-' + avatarVariant(nom) + '">' + esc(initiales(p)) + '</div>' +
-      '<div class="consult-body"><div class="pname">' + esc(nom) + '</div>' +
+      '<div class="consult-body"><div class="pname">' + esc(nom) +
+        (aValider ? '<span class="badge-avalider">⚠ À valider</span>' : '') + '</div>' +
         '<div class="reason">' + esc(motif) + '</div></div>' +
-      '<span class="consult-go">Ouvrir →</span>' + _DELETE_SVG;
+      '<span class="consult-go">' + (aValider ? 'Valider →' : 'Ouvrir →') + '</span>' + _DELETE_SVG;
     card.addEventListener('click', e => {
       if (e.target.closest('.consult-del')) return;
-      showDetail(c);
+      // Compte-rendu non validé → rouvrir l'écran de validation (différé).
+      if (aValider) openValidationScreen(c.id);
+      else showDetail(c);
     });
     card.querySelector('.consult-del').addEventListener('click', e => {
       e.stopPropagation();
@@ -1367,9 +1415,168 @@ $('dp-start').addEventListener('click', async () => {
 });
 
 /* Appelé par Python (api._main_win.evaluate_js) après fin de consultation */
-function onConsultationEnded() {
-  loadHome();
+async function onConsultationEnded() {
+  await loadHome();
+  // Une consultation vient d'être sauvegardée avec un compte-rendu à valider →
+  // ouvrir l'écran de validation immédiatement (flux « immédiat »).
+  const p = await api('get_cr_a_valider');
+  if (p && p.count > 0 && p.dernier_id) openValidationScreen(p.dernier_id);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Écran de validation du compte-rendu (cases à cocher)              */
+/* ------------------------------------------------------------------ */
+
+const VCR_CATS = [
+  ['motif',        'Motif'],
+  ['observations', 'Observations'],
+  ['traitements',  'Traitements'],
+  ['suivi',        'Suivi'],
+];
+let _vcrCid   = null;   // consultation en cours de validation
+let _vcrPoll  = null;   // timer de polling extraction
+let _vcrTries = 0;      // limite de polling (extraction qui n'aboutit pas)
+
+async function openValidationScreen(cid, opts) {
+  _vcrCid = cid;
+  _vcrTries = 0;
+  clearBanner($('vcr-banner'));
+  $('vcr-sections').innerHTML = '';
+  navigate('validate-cr');
+  await pollValidationData(!!(opts && opts.edition));
+}
+
+async function pollValidationData(edition) {
+  clearTimeout(_vcrPoll);
+  const d = await api('get_cr_elements', _vcrCid);
+  if (!d) return;
+  const p = d.patient || {};
+  const nom = ((p.nom||'') + ' ' + (p.prenom||'')).trim();
+  $('vcr-sub').textContent = (nom ? nom + ' — ' : '') +
+    "seuls les éléments cochés iront au compte-rendu.";
+  // Mode édition (depuis la fiche) : afficher immédiatement ce qui existe,
+  // même vide — pas d'extraction en cours à attendre. En flux normal,
+  // limiter l'attente (~35 s) puis laisser le médecin remplir à la main.
+  if (!d.ready && !edition && _vcrTries < 40) {
+    _vcrTries++;
+    show($('vcr-loading'));
+    if (currentView === 'validate-cr') {
+      _vcrPoll = setTimeout(() => pollValidationData(false), 900);
+    }
+    return;
+  }
+  hide($('vcr-loading'));
+  renderVcrSections(d.elements || {});
+}
+
+function vcrItemRow(text, checked) {
+  const row = document.createElement('div');
+  row.className = 'vcr-item' + (checked ? '' : ' unchecked');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.checked = checked;
+  cb.addEventListener('change', () => row.classList.toggle('unchecked', !cb.checked));
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'vcr-text'; inp.value = text;
+  const del = document.createElement('button');
+  del.className = 'vcr-del'; del.title = 'Supprimer';
+  del.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
+  del.addEventListener('click', () => row.remove());
+  row.appendChild(cb); row.appendChild(inp); row.appendChild(del);
+  return row;
+}
+
+function renderVcrSections(elements) {
+  const wrap = $('vcr-sections');
+  wrap.innerHTML = '';
+  VCR_CATS.forEach(([cat, titre]) => {
+    const sec = document.createElement('div');
+    sec.className = 'vcr-cat'; sec.dataset.cat = cat;
+    const h = document.createElement('div');
+    h.className = 'vcr-cat-title'; h.textContent = titre;
+    sec.appendChild(h);
+    const list = document.createElement('div');
+    list.className = 'vcr-list';
+    (elements[cat] || []).forEach(item => list.appendChild(vcrItemRow(item, true)));
+    sec.appendChild(list);
+    // Champ « + Ajouter… » + bouton « + » : chaque validation (Entrée ou clic)
+    // ajoute une ligne cochée et vide le champ, prêt pour l'ajout suivant —
+    // on peut enchaîner autant d'ajouts que voulu.
+    const row = document.createElement('div');
+    row.className = 'vcr-add-row';
+    const add = document.createElement('input');
+    add.type = 'text'; add.className = 'vcr-add';
+    add.placeholder = '+ Ajouter…';
+    const plus = document.createElement('button');
+    plus.type = 'button'; plus.className = 'vcr-add-btn';
+    plus.textContent = '+'; plus.title = 'Ajouter';
+    plus.disabled = true;                       // activé dès 1 caractère
+    const commit = () => {
+      const v = add.value.trim();
+      if (!v) return;
+      list.appendChild(vcrItemRow(v, true));
+      add.value = '';
+      plus.disabled = true;
+      add.focus();                              // enchaîner l'ajout suivant
+    };
+    add.addEventListener('input', () => { plus.disabled = !add.value.trim(); });
+    add.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); });
+    plus.addEventListener('click', commit);
+    row.appendChild(add); row.appendChild(plus);
+    sec.appendChild(row);
+    wrap.appendChild(sec);
+  });
+}
+
+/* Collecte les éléments COCHÉS (texte éventuellement édité) par catégorie.
+   Un « + Ajouter » non validé par Entrée mais rempli est aussi pris. */
+function collectVcrElements() {
+  const out = {};
+  document.querySelectorAll('#vcr-sections .vcr-cat').forEach(sec => {
+    const items = [];
+    sec.querySelectorAll('.vcr-item').forEach(row => {
+      const cb  = row.querySelector('input[type="checkbox"]');
+      const txt = row.querySelector('.vcr-text').value.trim();
+      if (cb.checked && txt) items.push(txt);
+    });
+    const add = sec.querySelector('.vcr-add');
+    if (add && add.value.trim()) items.push(add.value.trim());
+    out[sec.dataset.cat] = items;
+  });
+  return out;
+}
+
+$('vcr-validate').addEventListener('click', async () => {
+  const btn = $('vcr-validate');
+  btn.disabled = true; btn.textContent = 'Enregistrement…';
+  const res = await api('valider_cr', _vcrCid, collectVcrElements());
+  btn.disabled = false; btn.textContent = '✓ Valider et enregistrer';
+  if (res && res.ok) {
+    _vcrCid = null;
+    await loadHome();
+    navigate('home');
+  } else {
+    const b = $('vcr-banner');
+    b.className = 'banner banner-err';
+    b.textContent = (res && res.error) || 'Enregistrement impossible.';
+    show(b);
+  }
+});
+
+$('vcr-later').addEventListener('click', async () => {
+  // La consultation reste « à valider » (badge dans l'historique).
+  _vcrCid = null;
+  clearTimeout(_vcrPoll);
+  await loadHome();
+  navigate('home');
+});
+
+$('vcr-skip').addEventListener('click', async () => {
+  const res = await api('ignorer_cr', _vcrCid);
+  _vcrCid = null;
+  clearTimeout(_vcrPoll);
+  await loadHome();
+  navigate('home');
+});
 
 /* ------------------------------------------------------------------ */
 /*  Paramètres                                                         */
@@ -1468,13 +1675,9 @@ async function showDetail(c) {
   $('detail-patient-table').innerHTML = rows.map(([l,v]) =>
     '<tr><td>' + esc(l) + '</td><td>' + esc(v) + '</td></tr>').join('');
 
-  // Résumé
-  if (c.summary) {
-    $('detail-summary').textContent = c.summary;
-    show($('detail-summary-wrap'));
-  } else {
-    hide($('detail-summary-wrap'));
-  }
+  // Compte-rendu : rendu structuré depuis cr_elements (validé ou extrait),
+  // fallback texte brut pour les anciennes consultations (summary prose).
+  renderDetailCr(c);
 
   // Fichier — afficher uniquement le nom (basename), pas le chemin complet.
   $('detail-file-path').textContent =
@@ -1490,6 +1693,57 @@ async function showDetail(c) {
 
   navigate('detail');
 }
+
+/* Rendu du bloc compte-rendu de la fiche : catégories colorées + puces.
+   Statut : « ✓ Validé par le médecin » (bandeau « automatique » retiré) ou
+   « ⚠ À valider » pour un CR non encore validé. */
+function renderDetailCr(c) {
+  const box = $('detail-summary');
+  const status = $('detail-cr-status');
+  const valide = (c.cr_valide === true);
+  const aValider = (c.cr_valide === false);
+  status.className = 'cr-box-status ' + (valide ? 'valide' : 'attente');
+  status.textContent = valide ? '✓ Validé par le médecin'
+                     : aValider ? '⚠ À valider — généré automatiquement'
+                     : '';
+  box.innerHTML = '';
+  const els = c.cr_elements;
+  const aDesElements = els && VCR_CATS.some(([cat]) => (els[cat] || []).length);
+  if (aDesElements) {
+    VCR_CATS.forEach(([cat, titre]) => {
+      const items = els[cat] || [];
+      if (!items.length) return;
+      const blk = document.createElement('div');
+      blk.className = 'cr-cat-block';
+      blk.innerHTML = '<div class="cr-cat-name">' + esc(titre) + '</div>';
+      const ul = document.createElement('ul');
+      items.forEach(i => {
+        const li = document.createElement('li'); li.textContent = i;
+        ul.appendChild(li);
+      });
+      blk.appendChild(ul);
+      box.appendChild(blk);
+    });
+  } else if (c.summary) {
+    // Anciennes consultations : résumé prose. Retirer l'en-tête « généré
+    // automatiquement » si le CR a été validé (il ne l'est plus).
+    let txt = c.summary;
+    if (valide) txt = txt.replace(/^RÉSUMÉ[^\n]*\n?/, '').trimStart();
+    const pre = document.createElement('div');
+    pre.style.cssText = 'font-size:14px;line-height:1.7;white-space:pre-wrap;color:var(--txt-primary);';
+    pre.textContent = txt;
+    box.appendChild(pre);
+  } else {
+    box.innerHTML = '<div class="cr-empty">Aucun compte-rendu — cliquez sur « Modifier le compte-rendu » pour en créer un.</div>';
+  }
+  show($('detail-summary-wrap'));
+}
+
+/* « Modifier le compte-rendu » : rouvre l'écran de validation pré-rempli
+   (validé ou non). Après revalidation, le .docx est réécrit. */
+$('detail-cr-edit').addEventListener('click', () => {
+  if (currentConsult) openValidationScreen(currentConsult.id, {edition: true});
+});
 
 $('detail-back').addEventListener('click', () => navigate('home'));
 

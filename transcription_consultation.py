@@ -57,8 +57,10 @@ import storage  # persistance : historique JSON + génération .docx (fonctions 
 # Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
 from audio import (
     SAMPLE_RATE, CHANNELS, FRAME_MS, FRAME_SAMPLES, VAD_LEVEL,
-    SILENCE_MS, SILENCE_MS_CABINET, MIN_SPEECH_MS,
-    RMS_MIN, RMS_MIN_LOOPBACK, RMS_MIN_MIC, RMS_MIN_CABINET, MAX_SEG_MS,
+    SILENCE_MS, SILENCE_MS_CABINET, MIN_SPEECH_MS, MIN_SPEECH_MS_CABINET,
+    RMS_MIN, RMS_MIN_LOOPBACK, RMS_MIN_MIC, RMS_MIN_CABINET,
+    CABINET_CALIB_MS, CABINET_RMS_FACTOR, CABINET_RMS_FLOOR, CABINET_RMS_CEIL,
+    MAX_SEG_MS,
     lister_sorties, lister_micros, nom_sortie_defaut, nom_micro_defaut,
     resoudre_loopback, loopback_defaut, resoudre_micro, micro_defaut,
     loopback_par_nom, micro_par_nom,
@@ -89,7 +91,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "1.8.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "1.9.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -409,6 +411,30 @@ def choisir_peripheriques():
 
 # ----------------------------- CAPTURE + VAD ---------------------------------
 
+def _calibrer_seuil_cabinet(rec, seuil_defaut):
+    """Mesure le bruit ambiant sur ~CABINET_CALIB_MS et renvoie un seuil RMS
+    adaptatif = bruit_ambiant × facteur, borné [plancher, plafond].
+    Le médecin ne parle pas encore : on capte le silence de la pièce."""
+    n_frames = max(1, CABINET_CALIB_MS // FRAME_MS)
+    energies = []
+    for _ in range(n_frames):
+        if stop_event.is_set():
+            break
+        try:
+            data = rec.record(numframes=FRAME_SAMPLES)
+        except Exception:
+            break
+        mono = data[:, 0] if data.ndim > 1 else data
+        energies.append(rms(mono))
+    if not energies:
+        return seuil_defaut
+    ambiant = float(np.median(energies))   # médiane : robuste aux pics parasites
+    seuil = ambiant * CABINET_RMS_FACTOR
+    seuil = max(CABINET_RMS_FLOOR, min(CABINET_RMS_CEIL, seuil))
+    _caplog.debug("[CONVERSATION] bruit ambiant médian=%.4f → seuil=%.4f", ambiant, seuil)
+    return seuil
+
+
 def capturer(source_factory, label):
     """Capture d'une source + segmentation par silence (webrtcvad).
 
@@ -436,14 +462,22 @@ def capturer(source_factory, label):
         return
 
     # Cabinet : silence de fin de tour plus court → sépare mieux deux locuteurs
-    # qui enchaînent vite (pas de latence réseau comme en télé).
-    silence_ms = SILENCE_MS_CABINET if label == "Conversation" else SILENCE_MS
-    segmenteur = VADSegmenter(silence_ms=silence_ms)
-    _caplog.debug("[%s] thread démarré — seuil RMS=%.4f silence=%dms",
-                  label.upper(), rms_seuil, silence_ms)
+    # qui enchaînent vite ; durée min plus longue → élimine les micro-bruits.
+    is_cabinet = (label == "Conversation")
+    silence_ms    = SILENCE_MS_CABINET if is_cabinet else SILENCE_MS
+    min_speech_ms = MIN_SPEECH_MS_CABINET if is_cabinet else MIN_SPEECH_MS
+    segmenteur = VADSegmenter(silence_ms=silence_ms, min_speech_ms=min_speech_ms)
+    _caplog.debug("[%s] thread démarré — seuil RMS=%.4f silence=%dms min_speech=%dms",
+                  label.upper(), rms_seuil, silence_ms, min_speech_ms)
 
     try:
         with mic.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS, blocksize=FRAME_SAMPLES) as rec:
+            # Cabinet : calibrage adaptatif du seuil RMS sur le bruit ambiant des
+            # ~2 premières secondes (le médecin ne parle pas encore). S'adapte au
+            # cabinet calme comme bruyant.
+            if is_cabinet:
+                rms_seuil = _calibrer_seuil_cabinet(rec, rms_seuil)
+                _caplog.debug("[CONVERSATION] seuil RMS adaptatif=%.4f", rms_seuil)
             while not stop_event.is_set():
                 try:
                     data = rec.record(numframes=FRAME_SAMPLES)
@@ -527,7 +561,8 @@ def chemin_modele():
 # Moteur unique : Groq LLM (~3 s, Llama 70B). Si indisponible → pas de résumé,
 # le compte-rendu reste sauvegardé avec la transcription complète.
 
-from resume import groq_summarize, ENTETE_RESUME
+from resume import (groq_summarize, ENTETE_RESUME,
+                    extraire_elements_cr, elements_vers_resume, elements_vides)
 import correction
 
 
@@ -749,20 +784,36 @@ def _charger_modele_local():
         return None
 
 
+# Filtre de confiance Whisper : au-delà de ce no_speech_prob, le segment est
+# du bruit/silence halluciné. Parole réelle mesurée ≈ 0.002 (marge ×250) ;
+# les hallucinations « cohérentes » captées sur un blanc se situent souvent
+# en zone 0.4-0.6 → seuil resserré à 0.5 après test terrain. Chaque segment
+# accepté/rejeté journalise son no_speech_prob pour affinage.
+NO_SPEECH_MAX = 0.5
+
+
 def _transcrire_local(model, audio):
-    """Transcrit un segment avec le modèle local (beam=1)."""
+    """Transcrit un segment avec le modèle local (beam=1).
+    Renvoie (texte, no_speech_prob|None)."""
     segments, _ = model.transcribe(
         audio, language=LANGUAGE, vad_filter=True,
         beam_size=1,
         condition_on_previous_text=True,
         initial_prompt=WHISPER_INITIAL_PROMPT,
     )
-    return "".join(s.text for s in segments)
+    segments = list(segments)
+    texte = "".join(s.text for s in segments)
+    # faster-whisper expose no_speech_prob par segment.
+    probs = [getattr(s, "no_speech_prob", None) for s in segments]
+    probs = [p for p in probs if p is not None]
+    nsp = max(probs) if probs else None
+    return texte, nsp
 
 
 def _transcrire_cloud(client, audio):
     """Transcrit un segment via l'API Groq (whisper-large-v3). Lève si échec.
-    Le prompt combine le lexique médical et le contexte récent (cohérence)."""
+    Le prompt combine le lexique médical et le contexte récent (cohérence).
+    Renvoie (texte, no_speech_prob|None) — verbose_json expose le score."""
     buf = audio_to_wav_buffer(audio)   # numpy → BytesIO WAV nommé (audio.py)
 
     with _contexte_lock:
@@ -782,8 +833,20 @@ def _transcrire_cloud(client, audio):
         language=LANGUAGE,
         prompt=prompt_complet,
         temperature=0,   # déterministe → moins d'hallucinations, aucun coût en vitesse
+        response_format="verbose_json",   # expose no_speech_prob par segment
     )
-    return response.text
+    texte = getattr(response, "text", "") or ""
+    # Segments : liste d'objets ou de dicts selon la version du client.
+    nsp = None
+    segs = getattr(response, "segments", None) or []
+    probs = []
+    for s in segs:
+        p = s.get("no_speech_prob") if isinstance(s, dict) else getattr(s, "no_speech_prob", None)
+        if p is not None:
+            probs.append(float(p))
+    if probs:
+        nsp = max(probs)   # le pire segment décide (bruit ponctuel)
+    return texte, nsp
 
 
 # File des segments à corriger par le LLM (id, texte, contexte).
@@ -861,11 +924,12 @@ def transcrire():
         # s'arrêterait silencieusement pour toute la consultation.
         try:
             # Filtre RMS déjà appliqué dans capturer() avec le seuil adapté à la
-            # source (loopback patient, mic médecin télé, mic cabinet).
+            # source (loopback patient, mic médecin télé, mic cabinet adaptatif).
             texte = None
+            no_speech = None
             if cloud_on:
                 try:
-                    texte = _transcrire_cloud(cloud_client, audio)
+                    texte, no_speech = _transcrire_cloud(cloud_client, audio)
                 except Exception:
                     # Repli local : charger le modèle s'il est dispo, sinon
                     # proposer le téléchargement de secours.
@@ -882,12 +946,23 @@ def transcrire():
                         backup_signaled = True
 
             if texte is None and local_model is not None:
-                texte = _transcrire_local(local_model, audio)
+                texte, no_speech = _transcrire_local(local_model, audio)
+
+            # Filtre de confiance : score élevé de non-parole → bruit/silence
+            # halluciné, on rejette avant tout affichage.
+            if no_speech is not None and no_speech > NO_SPEECH_MAX:
+                _caplog.debug("[%s] rejeté : no_speech_prob=%.3f > %.2f (texte=%r)",
+                              label, no_speech, NO_SPEECH_MAX, (texte or "")[:60])
+                continue
 
             texte = corriger_transcription((texte or "").strip())
             # Filtre anti-hallucination de sous-titrage : ni affiché, ni
             # sauvegardé, ni injecté dans le contexte du prochain segment.
             if texte and not est_hallucination_generique(texte):
+                _caplog.debug("[%s] accepté no_speech=%s texte=%r",
+                              label,
+                              ("%.3f" % no_speech) if no_speech is not None else "n/a",
+                              texte[:60])
                 with _contexte_lock:
                     ctx_correction = _dernier_contexte
                 _maj_contexte(texte)   # alimente le prompt du prochain segment
@@ -2420,7 +2495,9 @@ class Api:
         cfg["dossier_sauvegarde"] = dossier
         sauver_config(cfg)
 
-        # Ajoute au journal.
+        # Ajoute au journal. Les entries sont stockées pour permettre de
+        # réécrire le .docx lors d'une validation DIFFÉRÉE du compte-rendu
+        # (les self._entries seront perdues à la consultation suivante).
         cid = str(uuid.uuid4())
         dur = int((datetime.datetime.now() - now).total_seconds() / 60)
         storage.ajouter_consultation(chemin_consultations(), {
@@ -2430,6 +2507,10 @@ class Api:
             "summary":      resume_text or "",
             "file_path":    file_path,
             "duration_min": dur,
+            "cr_valide":    False,          # compte-rendu à valider par le médecin
+            "cr_elements":  None,           # extraction IA (remplie en arrière-plan)
+            "entries":      [list(e) for e in entries],
+            "annexes":      annexes or [],  # pour réécrire le .docx en différé
         })
 
         # Mémorise pour un éventuel ajout de résumé ultérieur (flux non bloquant).
@@ -2437,7 +2518,119 @@ class Api:
         self._saved_file_path = file_path
         self._saved_annexes   = annexes or []
         self._saved_is_docx   = file_path.lower().endswith(".docx")
+
+        # Extraction structurée en arrière-plan (attribution cabinet incluse) :
+        # l'écran de validation la récupérera via get_cr_elements().
+        threading.Thread(target=self._extraction_cr_worker,
+                         args=(cid,), daemon=True).start()
         return {"ok": True, "file_path": file_path}
+
+    def _extraction_cr_worker(self, cid):
+        """Pipeline post-sauvegarde : attribution locuteurs (cabinet) →
+        correction globale → extraction JSON des éléments du compte-rendu →
+        consultations.json. Le .docx est réécrit avec le transcript amélioré.
+        Best-effort intégral : le document initial est déjà sauvegardé."""
+        try:
+            with self._lock:
+                n0 = len(self._entries)
+                entries = list(self._entries)
+            if self._mode == "cabinet":
+                entries = correction.attribuer_locuteurs(entries)
+            entries = correction.corriger_transcript_complet(entries)
+            with self._lock:
+                if entries and len(self._entries) == n0:
+                    self._entries[:] = entries
+            # Transcript fiable uniquement (lignes [?]/Conversation exclues).
+            transcript = "\n".join(
+                "[%s] %s : %s" % (h, LOCUTEUR_FICHIER.get(loc, loc), t)
+                for h, loc, t in entries
+                if not correction.est_ligne_douteuse(loc, t))
+            elements = extraire_elements_cr(transcript, GROQ_API_KEY)
+            storage.maj_consultation_cr(
+                chemin_consultations(), cid,
+                cr_elements=elements, entries=[list(e) for e in entries])
+            # Réécrire le .docx avec le transcript attribué/corrigé (sans résumé
+            # pour l'instant — il viendra à la validation).
+            fp = getattr(self, "_saved_file_path", None)
+            if fp and getattr(self, "_saved_is_docx", False) and self._infos:
+                now = getattr(self, "_start_time", None) or datetime.datetime.now()
+                storage.ecrire_docx(fp, self._infos, now, None, entries,
+                                    annexes=getattr(self, "_saved_annexes", []) or [])
+        except Exception:
+            _caplog.error("_extraction_cr_worker: %s", traceback.format_exc())
+            try:
+                storage.maj_consultation_cr(chemin_consultations(), cid,
+                                            cr_elements=elements_vides())
+            except Exception:
+                pass
+
+    # ===== VALIDATION DU COMPTE-RENDU (cases à cocher) ======================
+
+    def get_cr_elements(self, cid):
+        """Éléments extraits pour l'écran de validation.
+        Retourne {ready, elements, cr_valide, patient, date}."""
+        for c in storage.charger_consultations(chemin_consultations()):
+            if isinstance(c, dict) and c.get("id") == cid:
+                return {
+                    "ready":     c.get("cr_elements") is not None,
+                    "elements":  c.get("cr_elements") or elements_vides(),
+                    "cr_valide": bool(c.get("cr_valide")),
+                    "patient":   c.get("patient") or {},
+                    "date":      c.get("date", ""),
+                }
+        return {"ready": False, "elements": elements_vides(),
+                "cr_valide": False, "patient": {}, "date": ""}
+
+    def valider_cr(self, cid, elements):
+        """Valide le compte-rendu : seuls les éléments cochés (reçus ici)
+        vont dans le résumé du .docx. Réécrit le document et marque
+        cr_valide=True dans l'historique."""
+        record = None
+        for c in storage.charger_consultations(chemin_consultations()):
+            if isinstance(c, dict) and c.get("id") == cid:
+                record = c
+                break
+        if not record:
+            return {"ok": False, "error": "Consultation introuvable."}
+        resume_txt = elements_vers_resume(elements or {})
+        fp = record.get("file_path") or ""
+        entries = [tuple(e) for e in (record.get("entries") or [])]
+        if fp.lower().endswith(".docx") and record.get("patient"):
+            try:
+                d = datetime.datetime.fromisoformat(record.get("date", ""))
+            except Exception:
+                d = datetime.datetime.now()
+            try:
+                storage.ecrire_docx(fp, record["patient"], d, resume_txt,
+                                    entries,
+                                    annexes=record.get("annexes") or [])
+            except Exception as exc:
+                return {"ok": False,
+                        "error": "Document inaccessible : " + str(exc)}
+        try:
+            storage.maj_consultation_cr(chemin_consultations(), cid,
+                                        cr_elements=elements,
+                                        cr_valide=True, summary=resume_txt)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
+    def ignorer_cr(self, cid):
+        """« Ignorer le compte-rendu » : transcript seul, plus rien à valider."""
+        try:
+            storage.maj_consultation_cr(chemin_consultations(), cid,
+                                        cr_valide=True)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def get_cr_a_valider(self):
+        """Nombre + id de la consultation la plus récente à valider
+        (bandeau accueil et ouverture auto post-consultation)."""
+        en_attente = [c for c in storage.charger_consultations(chemin_consultations())
+                      if isinstance(c, dict) and c.get("cr_valide") is False]
+        return {"count": len(en_attente),
+                "dernier_id": en_attente[0].get("id") if en_attente else None}
 
     def finalize_with_resume(self, resume_text):
         """Réécrit le .docx déjà sauvegardé en y ajoutant le résumé en tête,

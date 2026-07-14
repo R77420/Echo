@@ -110,6 +110,32 @@ def supprimer_consultation_avec_fichier(chemin, cid):
     return record
 
 
+def maj_consultation_cr(chemin, cid, **champs):
+    """Met à jour des champs du compte-rendu d'une consultation (retry verrou).
+    Champs autorisés : cr_elements (dict), cr_valide (bool), summary (str),
+    entries (liste). Les autres champs de l'entrée restent intacts."""
+    autorises = {"cr_elements", "cr_valide", "summary", "entries"}
+    os.makedirs(os.path.dirname(chemin), exist_ok=True)
+    derniere_exc = None
+    for attempt in range(3):
+        try:
+            data = _lire_liste(chemin)
+            for c in data:
+                if isinstance(c, dict) and c.get("id") == cid:
+                    for k, v in champs.items():
+                        if k in autorises:
+                            c[k] = v
+                    break
+            with open(chemin, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return
+        except (PermissionError, OSError) as exc:
+            derniere_exc = exc
+            if attempt < 2:
+                time.sleep(0.15)
+    raise derniere_exc
+
+
 def maj_consultation_resume(chemin, cid, resume):
     """Met à jour le champ `summary` de l'entrée d'id `cid` (retry sur verrou).
     Les autres champs de l'entrée restent intacts."""

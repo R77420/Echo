@@ -166,3 +166,107 @@ def groq_summarize(transcript, api_key):
     except Exception as exc:
         logging.warning("groq_summarize: %s", exc)
         return None
+
+
+# ---- Extraction structurée (écran de validation à cases à cocher) ----------
+
+CR_CATEGORIES = ["motif", "observations", "traitements", "suivi"]
+
+EXTRACTION_SYSTEM = (
+    "Tu extrais les éléments factuels d'une transcription de consultation "
+    "médicale française, pour un écran de validation où le médecin coche "
+    "chaque élément.\n"
+    "Réponds UNIQUEMENT avec un objet JSON valide, aucun texte autour :\n"
+    '{"motif": [...], "observations": [...], "traitements": [...], "suivi": [...]}\n'
+    "RÈGLES IMPÉRATIVES :\n"
+    "- Chaque élément est une puce COURTE et FACTUELLE (une idée par puce)\n"
+    "- Ne transforme JAMAIS un propos vague ou familier en terme médical "
+    "savant : « j'ai trop faim » reste « dit avoir très faim », PAS "
+    "« hyperphagie » ; « je dors mal » reste « dort mal », PAS « insomnie »\n"
+    "- Reste au plus près des mots réellement dits\n"
+    "- N'invente RIEN : si une catégorie n'a aucun élément dans la "
+    "transcription, mets un tableau vide []\n"
+    "- motif : la ou les raisons de la consultation\n"
+    "- observations : symptômes décrits, constats de l'examen\n"
+    "- traitements : médicaments, posologies, prescriptions évoqués\n"
+    "- suivi : recommandations, prochains rendez-vous, examens à faire"
+)
+
+
+def _parse_elements_json(brut):
+    """Parse la réponse JSON du LLM. Renvoie le dict normalisé ou None."""
+    import json as _json
+    t = (brut or "").strip()
+    # Retirer un éventuel bloc markdown ```json ... ```
+    m = re.search(r"\{.*\}", t, re.DOTALL)
+    if not m:
+        return None
+    try:
+        d = _json.loads(m.group(0))
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    out = {}
+    for cat in CR_CATEGORIES:
+        v = d.get(cat, [])
+        if not isinstance(v, list):
+            v = []
+        out[cat] = [str(x).strip() for x in v if str(x).strip()]
+    return out
+
+
+def elements_vides():
+    """Structure vide (fail-safe : le médecin remplit à la main)."""
+    return {cat: [] for cat in CR_CATEGORIES}
+
+
+def extraire_elements_cr(transcript, api_key):
+    """Extrait les éléments structurés du compte-rendu (JSON par catégorie).
+    Remplace la génération de résumé en prose : l'IA propose, le médecin coche.
+    JSON malformé → un retry, puis structure vide. Jamais d'exception."""
+    if not transcript or not transcript.strip() or not api_key:
+        return elements_vides()
+    GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+    try:
+        import openai
+        client = openai.OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
+    except Exception:
+        return elements_vides()
+    messages = [
+        {"role": "system", "content": EXTRACTION_SYSTEM},
+        {"role": "user",
+         "content": "Transcription de la consultation :\n\n" + transcript
+                    + "\n\nExtrait les éléments au format JSON imposé."},
+    ]
+    for tentative in range(2):          # 1 essai + 1 retry si JSON malformé
+        try:
+            response = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=messages,
+                temperature=0,
+                max_tokens=700,
+                response_format={"type": "json_object"},
+            )
+            d = _parse_elements_json(response.choices[0].message.content)
+            if d is not None:
+                return d
+        except Exception as exc:
+            logging.warning("extraire_elements_cr (essai %d): %s", tentative + 1, exc)
+    return elements_vides()
+
+
+def elements_vers_resume(elements):
+    """Convertit les éléments VALIDÉS en texte résumé au format standard
+    (RESUME_TITRES + puces) — réutilisé tel quel par storage.ecrire_docx."""
+    libelles = dict(zip(CR_CATEGORIES, RESUME_TITRES))
+    lignes = [ENTETE_RESUME, ""]
+    for cat in CR_CATEGORIES:
+        lignes.append(libelles[cat])
+        items = (elements or {}).get(cat) or []
+        if items:
+            lignes.extend("- " + i for i in items)
+        else:
+            lignes.append("Non précisé")
+        lignes.append("")
+    return "\n".join(lignes).strip()
