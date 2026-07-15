@@ -1,8 +1,3 @@
-Remplacer entièrement README.md par le contenu ci-dessous,
-puis commit "docs: README v1.9" et push.
-
-═══ CONTENU DU NOUVEAU README.md ═══
-
 <div align="center">
 
 # Écho
@@ -107,5 +102,3 @@ Tests : `pytest tests/ -v`
 © 2026 Rayane Moussa. Tous droits réservés.
 Logiciel propriétaire — l'utilisation commerciale requiert une
 licence Écho active.
-
-═══ FIN DU CONTENU ═══
