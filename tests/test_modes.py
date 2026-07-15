@@ -210,3 +210,66 @@ def test_no_speech_filtre_worker_logique():
     # Vérifie la décision de rejet : no_speech au-dessus du seuil → rejeté.
     for nsp, rejete in [(0.002, False), (0.3, False), (0.7, True), (0.95, True)]:
         assert (nsp is not None and nsp > tc.NO_SPEECH_MAX) == rejete
+
+
+# ------------------------------------------------ enchaînement « Patient suivant »
+
+def test_enchainement_reinitialise(monkeypatch):
+    """2 consultations enchaînées : la 2e ne contient RIEN de la 1re
+    (transcript, contexte dynamique, infos patient)."""
+    _prepare(monkeypatch)
+    tc.stop_event.clear()
+    api = tc.Api()
+
+    # Consultation 1 (cabinet) + transcript + contexte + patient.
+    assert api.begin_consultation("cabinet", "MicroTest", "SortieTest")["ok"]
+    with api._lock:
+        api._entries.append(("10:00:00", "Conversation", "Patient un : douleurs au dos"))
+    tc._maj_contexte("douleurs au dos patient un")
+    api._infos = {"nom": "PATIENT_UN"}
+    tc.segment_queue.put(("Conversation", b"reste1"))
+    tc._correction_queue.put((1, "reste1", ""))
+
+    # Fin de la consultation 1 (comme le vrai flux), puis Patient suivant.
+    api.end_consultation()
+    assert api.patient_suivant()["ok"]
+
+    # La consultation 2 démarre vierge.
+    assert api._entries == []
+    assert tc._dernier_contexte == ""
+    assert api._infos is None
+    assert tc.segment_queue.qsize() == 0
+    assert tc._correction_queue.qsize() == 0
+    tc.stop_event.clear()
+
+
+def test_mode_conserve_enchainement(monkeypatch):
+    """Mode cabinet → Patient suivant → toujours cabinet (micro seul)."""
+    _prepare(monkeypatch)
+    tc.stop_event.clear()
+    api = tc.Api()
+    api.begin_consultation("cabinet", "MicroTest", "SortieTest")
+    assert api._mode == "cabinet"
+    api.end_consultation()
+
+    _FakeThread.instances = []          # observer les threads de la 2e consultation
+    r = api.patient_suivant()
+    assert r["ok"] and r.get("mode") == "cabinet"
+    assert api._mode == "cabinet"
+    assert _labels_captures() == ["Conversation"]   # micro seul, mode conservé
+    tc.stop_event.clear()
+
+
+def test_patient_suivant_echec_device(monkeypatch):
+    """Démarrage impossible (aucun micro) → {ok:false} sans exception
+    (le JS retombe proprement sur l'accueil)."""
+    _prepare(monkeypatch)
+    monkeypatch.setattr(tc, "resoudre_micro", lambda n: None)
+    monkeypatch.setattr(tc, "micro_defaut", lambda: None)
+    tc.stop_event.clear()
+    api = tc.Api()
+    api._mode = "cabinet"
+    api._started = False
+    r = api.patient_suivant()
+    assert not r["ok"] and "error" in r
+    tc.stop_event.clear()

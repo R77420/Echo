@@ -2311,8 +2311,10 @@ class Api:
             stop_event.set()
             for t in old_threads:
                 t.join(timeout=1.5)
-        # Purger les segments/affichages restants de la consultation précédente.
-        for q in (segment_queue, display_queue):
+        # Purger TOUTES les files de la consultation précédente (audio brut,
+        # affichage, corrections en attente) — aucun résidu ne doit fuir dans
+        # la consultation suivante lors d'un enchaînement « Patient suivant ».
+        for q in (segment_queue, display_queue, _correction_queue):
             while True:
                 try:
                     q.get_nowait()
@@ -2320,6 +2322,7 @@ class Api:
                     break
         # Réinitialise l'état pour une nouvelle consultation.
         stop_event.clear()
+        _reset_contexte()          # contexte dynamique Whisper (noms, médicaments)
         with self._lock:
             self._entries.clear()
             self._seg_index.clear()
@@ -2350,6 +2353,19 @@ class Api:
                 except Exception:
                     pass
         return result
+
+    def patient_suivant(self):
+        """Enchaîne une nouvelle consultation dans le MÊME mode et avec les
+        mêmes périphériques que la précédente, sans repasser par la modale de
+        choix de mode ni le sélecteur (« Patient suivant »).
+
+        begin_consultation réinitialise intégralement l'état (transcript,
+        contexte dynamique, files, chrono, threads de capture recréés) : aucune
+        donnée du patient précédent ne fuit. En cas d'échec de démarrage
+        (périphérique déconnecté…), renvoie {ok:false, error} — le JS retombe
+        proprement sur l'accueil, jamais de blocage."""
+        mode = getattr(self, "_mode", "tele")
+        return self.begin_consultation(mode)
 
     def end_consultation(self):
         """Ferme l'overlay et restaure la fenêtre principale."""

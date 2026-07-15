@@ -574,6 +574,20 @@
 </div>
 
 <!-- Modale : choix du type de consultation -->
+<!-- Choix post-consultation : enchaîner ou revenir à l'accueil -->
+<div id="next-modal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:440px;text-align:center;">
+    <div class="next-check">✓</div>
+    <div class="confirm-title" id="next-title">Compte-rendu enregistré</div>
+    <div class="confirm-sub" id="next-sub">Passer au patient suivant, dans le même mode ?</div>
+    <div id="next-banner" class="banner banner-err hidden" style="margin:12px 0;"></div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="next-patient" style="padding:12px;">+ Patient suivant</button>
+      <button class="btn btn-secondary" id="next-home" style="padding:12px;">Retour à l'accueil</button>
+    </div>
+  </div>
+</div>
+
 <div id="mode-modal" class="confirm-overlay hidden">
   <div class="confirm-box" style="max-width:560px;">
     <div class="confirm-title">Type de consultation</div>
@@ -1551,9 +1565,7 @@ $('vcr-validate').addEventListener('click', async () => {
   const res = await api('valider_cr', _vcrCid, collectVcrElements());
   btn.disabled = false; btn.textContent = '✓ Valider et enregistrer';
   if (res && res.ok) {
-    _vcrCid = null;
-    await loadHome();
-    navigate('home');
+    showNextChoice('Compte-rendu enregistré');
   } else {
     const b = $('vcr-banner');
     b.className = 'banner banner-err';
@@ -1564,18 +1576,57 @@ $('vcr-validate').addEventListener('click', async () => {
 
 $('vcr-later').addEventListener('click', async () => {
   // La consultation reste « à valider » (badge dans l'historique).
+  showNextChoice('Consultation enregistrée — à valider plus tard');
+});
+
+$('vcr-skip').addEventListener('click', async () => {
+  await api('ignorer_cr', _vcrCid);
+  showNextChoice('Compte-rendu ignoré');
+});
+
+/* ------------------------------------------------------------------ */
+/*  Enchaînement des consultations (« Patient suivant »)              */
+/* ------------------------------------------------------------------ */
+
+/* Affiche le choix post-consultation : enchaîner (même mode) ou accueil. */
+function showNextChoice(titre) {
   _vcrCid = null;
   clearTimeout(_vcrPoll);
+  $('next-title').textContent = titre;
+  clearBanner($('next-banner'));
+  const btn = $('next-patient');
+  btn.disabled = false; btn.textContent = '+ Patient suivant';
+  show($('next-modal'));
+}
+
+$('next-home').addEventListener('click', async () => {
+  hide($('next-modal'));
   await loadHome();
   navigate('home');
 });
 
-$('vcr-skip').addEventListener('click', async () => {
-  const res = await api('ignorer_cr', _vcrCid);
-  _vcrCid = null;
-  clearTimeout(_vcrPoll);
-  await loadHome();
-  navigate('home');
+$('next-patient').addEventListener('click', async () => {
+  const btn = $('next-patient');
+  btn.disabled = true; btn.textContent = 'Démarrage…';
+  clearBanner($('next-banner'));
+  // Relance immédiate dans le MÊME mode (cabinet/télé) et mêmes périphériques.
+  const res = await api('patient_suivant');
+  if (res && res.ok) {
+    // L'overlay s'ouvre pour le patient suivant. On remet l'accueil sous la
+    // fenêtre principale (minimisée) pour un état propre au retour.
+    hide($('next-modal'));
+    await loadHome();
+    navigate('home');
+  } else {
+    // Robustesse : démarrage impossible (périphérique déconnecté…) → message
+    // sobre, le médecin peut revenir à l'accueil. Jamais de blocage.
+    btn.disabled = false; btn.textContent = '+ Patient suivant';
+    const b = $('next-banner');
+    b.className = 'banner banner-err';
+    b.textContent = (res && res.error) ||
+      'Impossible de démarrer la consultation suivante. Vérifiez le périphérique audio.';
+    show(b);
+  }
 });
 
 /* ------------------------------------------------------------------ */
@@ -1974,6 +2025,8 @@ $('pp-btn-deconnecter').addEventListener('click', async () => {
 });
 
 </script>
+<!-- Données de démo pour captures marketing — inerte sans ?demo= dans l'URL -->
+<script src="demo_data.js"></script>
 
 </body>
 </html>
