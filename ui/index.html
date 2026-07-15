@@ -187,6 +187,7 @@
   </div>
   <div class="modal-footer">
     <button class="o-btn" id="p-cancel">Annuler</button>
+    <button class="o-btn" id="p-later" title="Sauvegarder sans nom — vous nommerez le patient plus tard depuis l'accueil">Nommer plus tard</button>
     <button class="o-btn o-btn-primary" id="p-submit">Continuer →</button>
   </div>
 </div>
@@ -690,6 +691,22 @@ async function startSaveFlow() {
 /* ── Formulaire patient ── */
 $('p-cancel').addEventListener('click', () => hide($('modal-patient')));
 $('p-submit').addEventListener('click', submitPatient);
+
+/* « Nommer plus tard » : sauvegarde immédiate sans nom (libellé provisoire
+   « Consultation de 9h15 », fichier auto, pas de boîte de dialogue). Le
+   médecin enchaîne tout de suite ; il nommera depuis l'accueil. */
+$('p-later').addEventListener('click', async () => {
+  const btn = $('p-later');
+  btn.disabled = true; btn.textContent = 'Enregistrement…';
+  const res = await api('save_sans_nom', []);
+  btn.disabled = false; btn.textContent = 'Nommer plus tard';
+  if (res && res.ok) {
+    hide($('modal-patient'));
+    await doClose();
+  } else {
+    alert((res && res.error) || "L'enregistrement a échoué. Veuillez réessayer.");
+  }
+});
 /* p-nom est géré à part : Entrée y sélectionne d'abord une suggestion. */
 ['p-prenom','p-ddn','p-motif'].forEach(id => {
   $(id).addEventListener('keydown', e => { if (e.key==='Enter') submitPatient(); });

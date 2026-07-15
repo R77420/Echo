@@ -6,6 +6,12 @@
       "runtimeExecutable": "py",
       "runtimeArgs": ["-m", "http.server", "8123", "--directory", "ui"],
       "port": 8123
+    },
+    {
+      "name": "echo-ui-alt",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["-m", "http.server", "8124", "--directory", "ui"],
+      "port": 8124
     }
   ]
 }

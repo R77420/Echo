@@ -378,3 +378,68 @@ def attribuer_locuteurs(entries):
     except Exception as exc:
         logging.debug("attribuer_locuteurs: %s", exc)
         return entries
+
+
+# ─────────────────────────── Détection du nom du patient ────────────────────
+
+SYSTEM_PROMPT_NOM = (
+    "Transcript d'une consultation médicale. Identifie le NOM DE FAMILLE du "
+    "patient s'il est explicitement prononcé (souvent dans les salutations : "
+    "« Bonjour madame X », « Monsieur Y, asseyez-vous »).\n"
+    "Réponds UNIQUEMENT en JSON :\n"
+    '{"nom": "DUBOIS", "prenom": "Marie", "confiance": "haute"}\n'
+    "- prenom : uniquement s'il est aussi prononcé, sinon \"\"\n"
+    "- confiance : \"haute\" si le nom est clairement adressé au patient, "
+    "\"faible\" si ambigu (peut être un tiers, un confrère, un membre de la "
+    "famille, un médecin cité)\n"
+    '- Si AUCUN nom de patient n\'est prononcé : {"nom": "", "prenom": "", '
+    '"confiance": "faible"}\n'
+    "- Ne JAMAIS inventer un nom. Dans le doute : confiance faible."
+)
+
+
+def detecter_nom_patient(entries):
+    """Extrait le nom du patient mentionné dans la conversation (salutations).
+
+    Renvoie {"nom": "DUBOIS", "prenom": "Marie", "confiance": "haute|faible"}
+    ou None (erreur API / JSON invalide / aucune entrée).
+
+    RÈGLE ABSOLUE : c'est une SUGGESTION affichée au médecin, jamais un
+    remplissage automatique silencieux — une erreur de nom dans un dossier
+    patient est grave. Le médecin valide toujours."""
+    import json as _json
+    if not entries:
+        return None
+    client = _client(TIMEOUT_GLOBAL)
+    if client is None:
+        return None
+    # Le nom est presque toujours en début de consultation : 10 premières
+    # lignes suffisent (et limitent le coût).
+    lignes = ["[%s] %s : %s" % (h, loc, t) for h, loc, t in entries[:10]]
+    try:
+        resp = client.chat.completions.create(
+            model=CORRECTION_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_NOM},
+                {"role": "user", "content": "\n".join(lignes)},
+            ],
+            temperature=0,
+            max_tokens=120,
+            response_format={"type": "json_object"},
+        )
+        brut = (resp.choices[0].message.content or "").strip()
+        m = re.search(r"\{.*\}", brut, re.DOTALL)
+        if not m:
+            return None
+        d = _json.loads(m.group(0))
+        if not isinstance(d, dict):
+            return None
+        nom = str(d.get("nom") or "").strip()
+        return {
+            "nom": nom.upper(),
+            "prenom": str(d.get("prenom") or "").strip(),
+            "confiance": "haute" if d.get("confiance") == "haute" and nom else "faible",
+        }
+    except Exception as exc:
+        logging.debug("detecter_nom_patient: %s", exc)
+        return None

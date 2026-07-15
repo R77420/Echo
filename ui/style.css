@@ -844,13 +844,46 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 }
 @keyframes vcr-spin { to { transform: rotate(360deg); } }
 
-/* Badge « à valider » (historique) et bandeau accueil */
-.badge-avalider {
+/* Badge UNIQUE « À compléter » (nom et/ou validation manquants) */
+.badge-acompleter {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
   background: #FDF3E2; color: #A8690F; border: 1px solid #EED9B8;
   flex-shrink: 0; margin-left: 8px;
 }
-[data-theme="dark"] .badge-avalider { background: #3a2d10; color: #f0c674; border-color: #5a4a20; }
+[data-theme="dark"] .badge-acompleter { background: #3a2d10; color: #f0c674; border-color: #5a4a20; }
+.pname-provisoire { font-style: italic; color: var(--txt-secondary); font-weight: 500; }
+
+/* Bandeau « à nommer » (accueil) — bleu */
+/* Toast éphémère de l'accueil (fin de série de rattrapage) */
+.home-toast {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: var(--r-md); margin-bottom: 12px;
+  background: var(--accent-lt); color: var(--accent);
+  border: 1px solid var(--card-hover);
+  font-size: 13.5px; font-weight: 600;
+}
+
+.ncr-pending-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: var(--r-md); margin-bottom: 12px;
+  background: #E2EEF8; color: #2F6BA3; border: 1px solid #C4DCEF;
+  font-size: 13.5px; cursor: pointer;
+}
+[data-theme="dark"] .ncr-pending-banner { background: #1a2c40; color: #7FB8E8; border-color: #2a4560; }
+
+/* Suggestion de nom détectée dans la conversation */
+.ncr-suggere { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.ncr-suggere-badge {
+  font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  background: var(--accent-lt); color: var(--accent);
+}
+.ncr-suggere-x {
+  border: none; background: transparent; color: var(--txt-secondary);
+  font-size: 15px; line-height: 1; cursor: pointer; padding: 2px 6px;
+  border-radius: 4px;
+}
+.ncr-suggere-x:hover { color: var(--danger); background: var(--bg-hover, rgba(0,0,0,0.05)); }
+
 .cr-pending-banner {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; border-radius: var(--r-md); margin-bottom: 16px;

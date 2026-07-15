@@ -280,8 +280,11 @@
       <button class="trial-close" id="trial-close" title="Fermer">✕</button>
     </div>
 
-    <!-- Comptes-rendus en attente de validation -->
-    <div id="cr-pending" class="cr-pending-banner hidden"></div>
+    <!-- Message éphémère (fin de série de rattrapage) -->
+    <div id="home-toast" class="home-toast hidden" role="status" aria-live="polite"></div>
+
+    <!-- Bandeau unifié : consultations à compléter (nom et/ou validation) -->
+    <div id="completion-pending" class="cr-pending-banner hidden"></div>
 
     <!-- Statistiques -->
     <div class="stats-grid" id="stats-grid"></div>
@@ -361,7 +364,7 @@
        ═══════════════════════════════════════════════ -->
   <div data-view="validate-cr" class="hidden" style="flex:1;display:flex;flex-direction:column;">
     <div class="page-header">
-      <div class="page-title">Valider le compte-rendu</div>
+      <div class="page-title" id="vcr-title">Valider le compte-rendu</div>
       <div class="page-subtitle" id="vcr-sub">L'IA propose, vous décidez — seuls les éléments cochés iront au compte-rendu.</div>
     </div>
     <div class="section flex-1" style="overflow-y:auto;">
@@ -375,6 +378,49 @@
           <button class="btn btn-primary" id="vcr-validate" style="padding:11px 18px;">✓ Valider et enregistrer</button>
           <button class="btn btn-secondary" id="vcr-later">Valider plus tard</button>
           <button class="btn btn-secondary" id="vcr-skip" style="color:var(--danger);border-color:var(--danger);">Ignorer le compte-rendu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       VUE : NOMMER LES CONSULTATIONS (saisie en série)
+       ═══════════════════════════════════════════════ -->
+  <div data-view="name-cr" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header">
+      <div class="page-title">Nommer les consultations</div>
+      <div class="page-subtitle" id="ncr-head"></div>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="max-width:620px;display:flex;flex-direction:column;gap:18px;">
+
+        <!-- Extrait du transcript pour reconnaître le patient -->
+        <div class="card" style="padding:14px 18px;">
+          <div class="section-title" style="margin-bottom:8px;">Début de la conversation</div>
+          <div id="ncr-extrait" style="display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.5;"></div>
+        </div>
+
+        <!-- Saisie du nom -->
+        <div class="field">
+          <label class="field-label">Nom du patient <span style="color:var(--danger)">*</span></label>
+          <div class="ac-wrap" style="position:relative;">
+            <input type="text" id="ncr-nom" autocomplete="off" placeholder="DUPONT">
+            <div class="combo-list hidden" id="ncr-nom-list"></div>
+          </div>
+          <div id="ncr-suggere" class="ncr-suggere hidden">
+            <span class="ncr-suggere-badge">✨ suggéré depuis la conversation</span>
+            <button type="button" class="ncr-suggere-x" id="ncr-suggere-x" title="Effacer la suggestion">×</button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="field-label">Prénom (facultatif)</label>
+          <input type="text" id="ncr-prenom" autocomplete="off" placeholder="Prénom">
+        </div>
+
+        <div id="ncr-banner" class="banner banner-err hidden"></div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-primary" id="ncr-next" style="padding:11px 18px;">Suivant →</button>
+          <button class="btn btn-secondary" id="ncr-done">Terminer</button>
         </div>
       </div>
     </div>
@@ -558,7 +604,7 @@
       </div>
       <div class="field">
         <label class="field-label">Prénom (facultatif)</label>
-        <input type="text" id="np-prenom" autocomplete="off" placeholder="Marie">
+        <input type="text" id="np-prenom" autocomplete="off" placeholder="Prénom">
       </div>
       <div class="field">
         <label class="field-label">Date de naissance (facultatif)</label>
@@ -1020,18 +1066,21 @@ async function loadHome() {
   }
   await loadStats();
   await loadConsultations();
-  await loadCrPending();
+  await loadCompletionPending();
   checkForUpdate();
 }
 
-/* Bandeau « X comptes-rendus à valider » (accueil). */
-async function loadCrPending() {
-  const el = $('cr-pending');
-  const p = await api('get_cr_a_valider');
-  if (!p || !p.count) { hide(el); return; }
-  const s = p.count > 1 ? 's' : '';
-  el.textContent = '⚠ ' + p.count + ' compte' + s + '-rendu' + s + ' à valider — cliquez pour reprendre';
-  el.onclick = () => openValidationScreen(p.dernier_id);
+/* Bandeau UNIFIÉ « X consultations à compléter » (accueil).
+   Une consultation est incomplète si son nom OU la validation de son
+   compte-rendu manque (ou les deux). Un seul bandeau, une seule file. */
+async function loadCompletionPending() {
+  const el = $('completion-pending');
+  const data = (await api('get_consultations')) || [];
+  const n = data.filter(_estIncomplete).length;
+  if (!n) { hide(el); return; }
+  const s = n > 1 ? 's' : '';
+  el.textContent = '📋 ' + n + ' consultation' + s + ' à compléter — cliquez pour reprendre';
+  el.onclick = () => demarrerSerieRattrapage(null, 'accueil');
   show(el);
 }
 
@@ -1177,22 +1226,24 @@ function renderConsultations(items) {
     }
     const nom   = ((p.nom||'') + ' ' + (p.prenom||'')).trim() || '—';
     const motif = p.motif || '—';
-    const aValider = (c.cr_valide === false);
+    const aNommer     = (c.nom_a_saisir === true);
+    const incomplete  = _estIncomplete(c);   // nom et/ou validation manquants
     const card  = document.createElement('div');
     card.className = 'consult';
     card.dataset.id = c.id;
     card.innerHTML =
       '<div class="time-rail"><span class="hm">' + esc(timeHM(c.date)) + '</span>' +
         '<span class="dur">' + (c.duration_min ? esc(c.duration_min + ' min') : '') + '</span></div>' +
-      '<div class="av av-' + avatarVariant(nom) + '">' + esc(initiales(p)) + '</div>' +
-      '<div class="consult-body"><div class="pname">' + esc(nom) +
-        (aValider ? '<span class="badge-avalider">⚠ À valider</span>' : '') + '</div>' +
+      '<div class="av av-' + avatarVariant(nom) + '">' + (aNommer ? '?' : esc(initiales(p))) + '</div>' +
+      '<div class="consult-body"><div class="pname' + (aNommer ? ' pname-provisoire' : '') + '">' + esc(nom) +
+        (incomplete ? '<span class="badge-acompleter">📋 À compléter</span>' : '') + '</div>' +
         '<div class="reason">' + esc(motif) + '</div></div>' +
-      '<span class="consult-go">' + (aValider ? 'Valider →' : 'Ouvrir →') + '</span>' + _DELETE_SVG;
+      '<span class="consult-go">' + (incomplete ? 'Compléter →' : 'Ouvrir →') + '</span>' + _DELETE_SVG;
     card.addEventListener('click', e => {
       if (e.target.closest('.consult-del')) return;
-      // Compte-rendu non validé → rouvrir l'écran de validation (différé).
-      if (aValider) openValidationScreen(c.id);
+      // Clic ciblé depuis l'historique : rattrapage d'UNE consultation
+      // (nom puis validation si besoin), retour à sa fiche à la fin.
+      if (incomplete) demarrerSerieRattrapage(c.id, 'fiche');
       else showDetail(c);
     });
     card.querySelector('.consult-del').addEventListener('click', e => {
@@ -1431,10 +1482,16 @@ $('dp-start').addEventListener('click', async () => {
 /* Appelé par Python (api._main_win.evaluate_js) après fin de consultation */
 async function onConsultationEnded() {
   await loadHome();
-  // Une consultation vient d'être sauvegardée avec un compte-rendu à valider →
-  // ouvrir l'écran de validation immédiatement (flux « immédiat »).
-  const p = await api('get_cr_a_valider');
-  if (p && p.count > 0 && p.dernier_id) openValidationScreen(p.dernier_id);
+  const f = await api('get_derniere_consultation_flags');
+  if (f && f.a_nommer) {
+    // « Nommer plus tard » : pas d'écran intermédiaire, le médecin enchaîne
+    // immédiatement (il nommera et validera en série depuis l'accueil).
+    showNextChoice('Consultation enregistrée — à nommer plus tard');
+  } else if (f && f.a_valider && f.id) {
+    // Flux normal post-consultation : écran de validation, puis modale
+    // « Patient suivant » (origine consultation).
+    openValidationScreen(f.id, { origine: 'consultation' });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1450,12 +1507,23 @@ const VCR_CATS = [
 let _vcrCid   = null;   // consultation en cours de validation
 let _vcrPoll  = null;   // timer de polling extraction
 let _vcrTries = 0;      // limite de polling (extraction qui n'aboutit pas)
+/* Contexte d'arrivée — les actions proposées en dépendent :
+   'consultation' : flux direct post-consultation → modale Patient suivant
+   'serie'        : rattrapage depuis le bandeau → enchaîne les CR en attente
+   'fiche'        : depuis l'historique / bouton Modifier → retour à la fiche */
+let _vcrOrigine = 'consultation';
 
 async function openValidationScreen(cid, opts) {
   _vcrCid = cid;
+  _vcrOrigine = (opts && opts.origine) || 'consultation';
   _vcrTries = 0;
   clearBanner($('vcr-banner'));
   $('vcr-sections').innerHTML = '';
+  // Libellés adaptés au contexte : en série, tout mène au CR suivant.
+  const serie = (_vcrOrigine === 'serie');
+  $('vcr-validate').textContent = serie ? '✓ Valider et suivant →' : '✓ Valider et enregistrer';
+  $('vcr-skip').textContent     = serie ? 'Ignorer et suivant' : 'Ignorer le compte-rendu';
+  $('vcr-later').textContent    = serie ? 'Terminer' : 'Valider plus tard';
   navigate('validate-cr');
   await pollValidationData(!!(opts && opts.edition));
 }
@@ -1466,7 +1534,13 @@ async function pollValidationData(edition) {
   if (!d) return;
   const p = d.patient || {};
   const nom = ((p.nom||'') + ' ' + (p.prenom||'')).trim();
-  $('vcr-sub').textContent = (nom ? nom + ' — ' : '') +
+  const enSerie = (_vcrOrigine === 'serie' && _serie);
+  const pos = enSerie ? ' · ' + (_serie.idx + 1) + ' sur ' + _serie.total : '';
+  // En série : titre « Compléter · Nom · X sur Y » ; sinon titre standard.
+  $('vcr-title').textContent = enSerie
+    ? 'Compléter' + (nom ? ' · ' + nom : '') + pos
+    : 'Valider le compte-rendu';
+  $('vcr-sub').textContent = (nom && !enSerie ? nom + ' — ' : '') +
     "seuls les éléments cochés iront au compte-rendu.";
   // Mode édition (depuis la fiche) : afficher immédiatement ce qui existe,
   // même vide — pas d'extraction en cours à attendre. En flux normal,
@@ -1559,13 +1633,43 @@ function collectVcrElements() {
   return out;
 }
 
+/* Sortie de l'écran de validation, selon le contexte d'arrivée. */
+async function vcrSortie(action) {
+  const cid = _vcrCid;
+  _vcrCid = null;
+  clearTimeout(_vcrPoll);
+  if (_vcrOrigine === 'serie') {
+    // Rattrapage : pas de nouvelle consultation — on avance dans la pile.
+    if (action === 'later') { await finSerie(); }
+    else serieApresValidation();
+    return;
+  }
+  if (_vcrOrigine === 'fiche') {
+    // Depuis l'historique : retour à la fiche de la consultation, à jour.
+    const data = (await api('get_consultations')) || [];
+    allConsultations = data;
+    const c = data.find(x => x.id === cid);
+    if (c) { await showDetail(c); return; }
+    await loadHome(); navigate('home');
+    return;
+  }
+  // Flux post-consultation : proposer d'enchaîner (Patient suivant).
+  const titres = {
+    valide:  'Compte-rendu enregistré',
+    later:   'Consultation enregistrée — à valider plus tard',
+    ignore:  'Compte-rendu ignoré',
+  };
+  showNextChoice(titres[action] || 'Consultation enregistrée');
+}
+
 $('vcr-validate').addEventListener('click', async () => {
   const btn = $('vcr-validate');
+  const label = btn.textContent;
   btn.disabled = true; btn.textContent = 'Enregistrement…';
   const res = await api('valider_cr', _vcrCid, collectVcrElements());
-  btn.disabled = false; btn.textContent = '✓ Valider et enregistrer';
+  btn.disabled = false; btn.textContent = label;
   if (res && res.ok) {
-    showNextChoice('Compte-rendu enregistré');
+    await vcrSortie('valide');
   } else {
     const b = $('vcr-banner');
     b.className = 'banner banner-err';
@@ -1576,12 +1680,12 @@ $('vcr-validate').addEventListener('click', async () => {
 
 $('vcr-later').addEventListener('click', async () => {
   // La consultation reste « à valider » (badge dans l'historique).
-  showNextChoice('Consultation enregistrée — à valider plus tard');
+  await vcrSortie('later');
 });
 
 $('vcr-skip').addEventListener('click', async () => {
   await api('ignorer_cr', _vcrCid);
-  showNextChoice('Compte-rendu ignoré');
+  await vcrSortie('ignore');
 });
 
 /* ------------------------------------------------------------------ */
@@ -1627,6 +1731,271 @@ $('next-patient').addEventListener('click', async () => {
       'Impossible de démarrer la consultation suivante. Vérifiez le périphérique audio.';
     show(b);
   }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Saisie en série des noms (consultations « Nommer plus tard »)     */
+/* ------------------------------------------------------------------ */
+
+/* ── Contrôleur de complétion en série (rattrapage) ──
+   UNE seule file de consultations INCOMPLÈTES (nom manquant, compte-rendu
+   non validé, ou les deux). Pour chaque consultation, on enchaîne ses étapes
+   manquantes : nom (si nom_a_saisir) PUIS validation (si cr non validé), puis
+   la consultation suivante — jamais de proposition de nouvelle consultation.
+
+   Deux modes de fin :
+     'accueil' (depuis le bandeau) : à la fin → accueil + message sobre
+     'fiche'   (clic ciblé dans l'historique) : une seule consultation,
+               à la fin → retour à sa fiche (pas de passage au suivant). */
+let _serie = null;              // {items, idx, total, finMode, retourCid}
+let _serieNommage = {};         // id → détails nommage (extrait, suggestion)
+
+function _estIncomplete(c) {
+  return c && (c.nom_a_saisir === true || c.cr_valide === false);
+}
+
+async function demarrerSerieRattrapage(cidPrio, finMode) {
+  const data = (await api('get_consultations')) || [];
+  let items;
+  if (finMode === 'fiche' && cidPrio) {
+    // Clic ciblé : UNE seule consultation, retour à sa fiche à la fin.
+    items = data.filter(c => c.id === cidPrio && _estIncomplete(c));
+  } else {
+    items = data.filter(_estIncomplete);
+    if (cidPrio) {   // commencer par celle cliquée (bandeau non concerné)
+      const i = items.findIndex(x => x.id === cidPrio);
+      if (i > 0) items.unshift(items.splice(i, 1)[0]);
+    }
+  }
+  items = items.map(c => ({ id: c.id,
+                            aNommer: c.nom_a_saisir === true,
+                            aValider: c.cr_valide === false }));
+  if (!items.length) { await finSerie(); return; }
+  // Détails de nommage (extrait, nom suggéré) chargés une fois.
+  _serieNommage = {};
+  ((await api('get_consultations_a_nommer')) || []).forEach(d => {
+    _serieNommage[d.id] = d;
+  });
+  _serie = { items, idx: 0, total: items.length,
+             finMode: finMode || 'accueil', retourCid: cidPrio };
+  await serieEtape();
+}
+
+async function serieEtape() {
+  if (!_serie || _serie.idx >= _serie.items.length) {
+    await finSerie('Toutes les consultations sont complétées ✓');
+    return;
+  }
+  const it = _serie.items[_serie.idx];
+  if (it.aNommer && _serieNommage[it.id]) {
+    navigate('name-cr');
+    await renderNaming(_serieNommage[it.id]);
+  } else if (it.aValider) {
+    await openValidationScreen(it.id, { origine: 'serie' });
+  } else {
+    _serie.idx++;
+    await serieEtape();
+  }
+}
+
+/* Après nommage : MÊME consultation → étape validation si besoin. */
+async function serieApresNommage() {
+  if (!_serie) return;
+  _serie.items[_serie.idx].aNommer = false;
+  await serieEtape();
+}
+
+/* Après validation (ou ignorer) : consultation suivante de la file. */
+async function serieApresValidation() {
+  if (!_serie) { await finSerie(); return; }
+  _serie.items[_serie.idx].aValider = false;
+  _serie.idx++;
+  await serieEtape();
+}
+
+async function finSerie(msg) {
+  const s = _serie;
+  _serie = null;
+  // Clic ciblé depuis l'historique → retour à la fiche de la consultation.
+  if (s && s.finMode === 'fiche' && s.retourCid) {
+    const data = (await api('get_consultations')) || [];
+    allConsultations = data;
+    const c = data.find(x => x.id === s.retourCid);
+    if (c) { await showDetail(c); return; }
+  }
+  await loadHome();
+  navigate('home');
+  if (msg && s && s.finMode !== 'fiche') toastAccueil(msg);
+}
+
+/* Message sobre et éphémère en haut de l'accueil. */
+let _toastTimer = null;
+function toastAccueil(msg) {
+  const el = $('home-toast');
+  if (!el) return;
+  el.textContent = msg;
+  show(el);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => hide(el), 4000);
+}
+
+function _heureLibelle(iso) {
+  try { const d = new Date(iso); return d.getHours() + 'h' + String(d.getMinutes()).padStart(2, '0'); }
+  catch { return ''; }
+}
+
+async function renderNaming(c) {
+  if (!c) { await finSerie(); return; }
+  clearBanner($('ncr-banner'));
+  // En-tête cohérent : « Compléter · Consultation de 9h15 · 1 sur 3 »
+  $('ncr-head').textContent =
+    'Compléter · ' + (c.libelle || 'Consultation de ' + _heureLibelle(c.date)) +
+    (c.duration_min ? ' · ' + c.duration_min + ' min' : '') +
+    ' · ' + (_serie ? (_serie.idx + 1) + ' sur ' + _serie.total : '');
+
+  // Extrait du début du transcript (reconnaître le patient).
+  const ex = $('ncr-extrait');
+  ex.innerHTML = '';
+  (c.extrait || []).forEach(l => {
+    const div = document.createElement('div');
+    const tag = document.createElement('span');
+    tag.style.cssText = 'font-weight:600;color:var(--accent);margin-right:6px;font-size:12px;';
+    tag.textContent = l.loc + ' :';
+    div.appendChild(tag);
+    div.appendChild(document.createTextNode(l.texte));
+    ex.appendChild(div);
+  });
+  if (!ex.children.length) ex.innerHTML = '<span style="color:var(--txt-secondary);font-style:italic;">(pas de transcript)</span>';
+
+  // Suggestion de nom : pré-rempli si confiance haute, placeholder si faible.
+  const nomEl = $('ncr-nom'), preEl = $('ncr-prenom');
+  nomEl.value = ''; preEl.value = '';
+  nomEl.placeholder = 'DUPONT';
+  delete nomEl.dataset.sugg;
+  hide($('ncr-suggere'));
+  const s = c.nom_suggere;
+  if (s && s.nom) {
+    if (s.confiance === 'haute') {
+      nomEl.value = s.nom;
+      preEl.value = s.prenom || '';
+      show($('ncr-suggere'));
+      // Croiser avec les patients connus : compléter le prénom si la fiche existe.
+      if (!preEl.value) {
+        const connus = await api('suggerer_patients', s.nom) || [];
+        const exact = connus.filter(p => (p.nom || '').toUpperCase() === s.nom.toUpperCase());
+        if (exact.length === 1 && exact[0].prenom) preEl.value = exact[0].prenom;
+      }
+    } else {
+      // Confiance faible : proposé en placeholder, un clic l'accepte.
+      nomEl.placeholder = s.nom + ' ?';
+      nomEl.dataset.sugg = s.nom;
+    }
+  }
+  nomEl.focus();
+}
+
+/* Suggestion faible : cliquer dans le champ vide accepte le nom proposé. */
+$('ncr-nom').addEventListener('focus', function () {
+  if (!this.value && this.dataset.sugg) {
+    this.value = this.dataset.sugg;
+    delete this.dataset.sugg;
+    this.select();
+  }
+});
+$('ncr-suggere-x').addEventListener('click', () => {
+  $('ncr-nom').value = ''; $('ncr-prenom').value = '';
+  hide($('ncr-suggere'));
+  $('ncr-nom').focus();
+});
+// Toute édition manuelle retire le badge « suggéré ».
+$('ncr-nom').addEventListener('input', () => hide($('ncr-suggere')));
+
+/* Autocomplétion patients connus (même moteur que le formulaire overlay). */
+let _ncrAcItems = [], _ncrAcSel = -1, _ncrAcTimer = null;
+function ncrAcClose() { hide($('ncr-nom-list')); _ncrAcItems = []; _ncrAcSel = -1; }
+function ncrAcRender() {
+  const box = $('ncr-nom-list');
+  box.innerHTML = '';
+  _ncrAcItems.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'combo-item' + (i === _ncrAcSel ? ' sel' : '');
+    div.textContent = (p.nom || '').toUpperCase() + (p.prenom ? ' ' + p.prenom : '') +
+      ' · ' + p.nb_consultations + ' consultation' + (p.nb_consultations > 1 ? 's' : '');
+    div.addEventListener('mousedown', e => {
+      e.preventDefault();
+      $('ncr-nom').value = p.nom || '';
+      $('ncr-prenom').value = p.prenom || '';
+      ncrAcClose();
+    });
+    box.appendChild(div);
+  });
+  if (_ncrAcItems.length) show(box); else hide(box);
+}
+$('ncr-nom').addEventListener('input', function () {
+  clearTimeout(_ncrAcTimer);
+  const q = this.value.trim();
+  if (q.length < 2) { ncrAcClose(); return; }
+  _ncrAcTimer = setTimeout(async () => {
+    const res = await api('suggerer_patients', q);
+    if ($('ncr-nom').value.trim() !== q) return;
+    _ncrAcItems = Array.isArray(res) ? res : [];
+    _ncrAcSel = _ncrAcItems.length ? 0 : -1;
+    ncrAcRender();
+  }, 200);
+});
+$('ncr-nom').addEventListener('blur', () => setTimeout(ncrAcClose, 120));
+$('ncr-nom').addEventListener('keydown', e => {
+  const open = _ncrAcItems.length > 0;
+  if (e.key === 'ArrowDown' && open) {
+    e.preventDefault(); _ncrAcSel = (_ncrAcSel + 1) % _ncrAcItems.length; ncrAcRender();
+  } else if (e.key === 'ArrowUp' && open) {
+    e.preventDefault(); _ncrAcSel = (_ncrAcSel - 1 + _ncrAcItems.length) % _ncrAcItems.length; ncrAcRender();
+  } else if (e.key === 'Enter') {
+    if (open && _ncrAcSel >= 0) {
+      e.preventDefault();
+      const p = _ncrAcItems[_ncrAcSel];
+      $('ncr-nom').value = p.nom || '';
+      $('ncr-prenom').value = p.prenom || '';
+      ncrAcClose();
+    } else {
+      // Entrée = valider + passer à la suivante (nommer 10 en 2 minutes).
+      $('ncr-next').click();
+    }
+  } else if (e.key === 'Escape' && open) {
+    e.stopPropagation(); ncrAcClose();
+  }
+});
+$('ncr-prenom').addEventListener('keydown', e => { if (e.key === 'Enter') $('ncr-next').click(); });
+
+$('ncr-next').addEventListener('click', async () => {
+  const it = _serie && _serie.items[_serie.idx];
+  if (!it) return;
+  const nom = $('ncr-nom').value.trim();
+  if (!nom) {
+    const b = $('ncr-banner');
+    b.className = 'banner banner-err';
+    b.textContent = 'Le nom est obligatoire (ou cliquez « Terminer » pour sortir).';
+    show(b);
+    $('ncr-nom').focus();
+    return;
+  }
+  const btn = $('ncr-next');
+  btn.disabled = true;
+  const res = await api('nommer_consultation', it.id, nom, $('ncr-prenom').value.trim());
+  btn.disabled = false;
+  if (!res || !res.ok) {
+    const b = $('ncr-banner');
+    b.className = 'banner banner-err';
+    b.textContent = (res && res.error) || 'Enregistrement impossible.';
+    show(b);
+    return;
+  }
+  // Nommée → même consultation, étape validation si elle est aussi à valider.
+  await serieApresNommage();
+});
+
+$('ncr-done').addEventListener('click', async () => {
+  await finSerie();
 });
 
 /* ------------------------------------------------------------------ */
@@ -1793,7 +2162,8 @@ function renderDetailCr(c) {
 /* « Modifier le compte-rendu » : rouvre l'écran de validation pré-rempli
    (validé ou non). Après revalidation, le .docx est réécrit. */
 $('detail-cr-edit').addEventListener('click', () => {
-  if (currentConsult) openValidationScreen(currentConsult.id, {edition: true});
+  if (currentConsult) openValidationScreen(currentConsult.id,
+    { edition: true, origine: 'fiche' });
 });
 
 $('detail-back').addEventListener('click', () => navigate('home'));

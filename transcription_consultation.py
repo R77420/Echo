@@ -2719,6 +2719,134 @@ class Api:
         threading.Thread(target=worker, daemon=True).start()
         return {"ok": True}
 
+    # ===== SAISIE DIFFÉRÉE DU NOM (« Nommer plus tard ») =====================
+
+    def save_sans_nom(self, annexes=None):
+        """« Nommer plus tard » : sauvegarde immédiate SANS nom de patient.
+
+        - Libellé provisoire « Consultation de 9h15 » (heure de début)
+        - Fichier .docx écrit automatiquement dans le dossier de sauvegarde
+          configuré (ou Documents), sans boîte de dialogue — le médecin
+          enchaîne immédiatement
+        - nom_a_saisir=True dans l'historique ; la détection du nom prononcé
+          dans la conversation tourne en arrière-plan (ne bloque JAMAIS)."""
+        debut = getattr(self, "_start_time", None) or datetime.datetime.now()
+        libelle = "Consultation de %dh%02d" % (debut.hour, debut.minute)
+        self._infos = {"nom": libelle, "prenom": "", "naissance": "", "motif": ""}
+
+        # Chemin automatique : dossier configuré > Documents. Déduplication.
+        cfg = charger_config()
+        dossier = cfg.get("dossier_sauvegarde") or ""
+        if not dossier or not os.path.isdir(dossier):
+            dossier = os.path.join(os.path.expanduser("~"), "Documents")
+            os.makedirs(dossier, exist_ok=True)
+        base = "Consultation_%s_%02dh%02d" % (
+            debut.strftime("%Y-%m-%d"), debut.hour, debut.minute)
+        fp = os.path.join(dossier, base + ".docx")
+        n = 2
+        while os.path.exists(fp):
+            fp = os.path.join(dossier, "%s_%d.docx" % (base, n))
+            n += 1
+
+        res = self.perform_save(fp, "", annexes or [])
+        if not res.get("ok"):
+            return res
+        cid = self._saved_id
+        try:
+            storage.maj_consultation_cr(chemin_consultations(), cid,
+                                        nom_a_saisir=True)
+        except Exception:
+            pass
+        # Détection du nom prononcé — SUGGESTION uniquement, jamais un
+        # remplissage automatique (une erreur de nom au dossier est grave).
+        with self._lock:
+            entries = list(self._entries)
+
+        def worker():
+            try:
+                suggere = correction.detecter_nom_patient(entries)
+                if suggere and suggere.get("nom"):
+                    storage.maj_consultation_cr(chemin_consultations(), cid,
+                                                nom_suggere=suggere)
+            except Exception:
+                _caplog.error("detecter_nom worker: %s", traceback.format_exc())
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"ok": True, "file_path": fp, "cid": cid}
+
+    def get_consultations_a_nommer(self):
+        """File des consultations sans nom, pour la saisie en série.
+        [{id, libelle, date, duration_min, extrait (4 lignes), nom_suggere}]"""
+        out = []
+        for c in storage.charger_consultations(chemin_consultations()):
+            if not (isinstance(c, dict) and c.get("nom_a_saisir")):
+                continue
+            entries = c.get("entries") or []
+            extrait = [
+                {"loc": LOCUTEUR_FICHIER.get(e[1], e[1]), "texte": e[2]}
+                for e in entries[:4] if len(e) >= 3
+            ]
+            out.append({
+                "id":           c.get("id"),
+                "libelle":      (c.get("patient") or {}).get("nom", ""),
+                "date":         c.get("date", ""),
+                "duration_min": c.get("duration_min", 0),
+                "extrait":      extrait,
+                "nom_suggere":  c.get("nom_suggere") or None,
+            })
+        return out
+
+    def nommer_consultation(self, cid, nom, prenom=""):
+        """Nomme une consultation différée : remplace le libellé provisoire,
+        retire le flag nom_a_saisir et réécrit l'en-tête du .docx (best-effort)."""
+        nom = (nom or "").strip()
+        if not nom:
+            return {"ok": False, "error": "Le nom est obligatoire."}
+        record = None
+        for c in storage.charger_consultations(chemin_consultations()):
+            if isinstance(c, dict) and c.get("id") == cid:
+                record = c
+                break
+        if not record:
+            return {"ok": False, "error": "Consultation introuvable."}
+        patient = dict(record.get("patient") or {})
+        patient["nom"] = nom
+        patient["prenom"] = (prenom or "").strip()
+        try:
+            storage.maj_consultation_cr(chemin_consultations(), cid,
+                                        patient=patient, nom_a_saisir=False)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        # Réécrire l'en-tête patient du .docx (best-effort, non bloquant).
+        fp = record.get("file_path") or ""
+        if fp.lower().endswith(".docx") and os.path.isfile(fp):
+            try:
+                d = datetime.datetime.fromisoformat(record.get("date", ""))
+            except Exception:
+                d = datetime.datetime.now()
+            try:
+                storage.ecrire_docx(
+                    fp, patient, d, record.get("summary") or None,
+                    [tuple(e) for e in (record.get("entries") or [])],
+                    annexes=record.get("annexes") or [])
+            except Exception:
+                _caplog.error("nommer_consultation docx: %s",
+                              traceback.format_exc())
+        return {"ok": True}
+
+    def get_derniere_consultation_flags(self):
+        """Flags de la consultation la plus récente (routage post-consultation
+        dans la fenêtre principale : nommage différé vs écran de validation)."""
+        data = storage.charger_consultations(chemin_consultations())
+        if not data or not isinstance(data[0], dict):
+            return {"id": None, "a_nommer": False, "a_valider": False}
+        c = data[0]
+        return {
+            "id":        c.get("id"),
+            "a_nommer":  bool(c.get("nom_a_saisir")),
+            "a_valider": c.get("cr_valide") is False,
+        }
+
     # ===== HISTORIQUE =========================================================
 
     def get_consultations(self):

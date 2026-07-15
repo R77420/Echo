@@ -113,8 +113,10 @@ def supprimer_consultation_avec_fichier(chemin, cid):
 def maj_consultation_cr(chemin, cid, **champs):
     """Met à jour des champs du compte-rendu d'une consultation (retry verrou).
     Champs autorisés : cr_elements (dict), cr_valide (bool), summary (str),
-    entries (liste). Les autres champs de l'entrée restent intacts."""
-    autorises = {"cr_elements", "cr_valide", "summary", "entries"}
+    entries (liste), patient (dict), nom_a_saisir (bool), nom_suggere (dict).
+    Les autres champs de l'entrée restent intacts."""
+    autorises = {"cr_elements", "cr_valide", "summary", "entries",
+                 "patient", "nom_a_saisir", "nom_suggere"}
     os.makedirs(os.path.dirname(chemin), exist_ok=True)
     derniere_exc = None
     for attempt in range(3):
