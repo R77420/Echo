@@ -143,3 +143,101 @@ def test_api_valider_et_ignorer(monkeypatch, tmp_path):
     # Ignorer c1 → plus rien à valider.
     assert api.ignorer_cr("c1")["ok"]
     assert api.get_cr_a_valider()["count"] == 0
+
+
+# ------------------------------------------------ validation groupée
+
+def _rec_v(cid, nom="DUPONT", cr_valide=False, nom_a_saisir=False, elements=None):
+    return {"id": cid, "date": "2026-07-14T10:00:00",
+            "patient": {"nom": nom, "prenom": "", "naissance": "", "motif": ""},
+            "summary": "", "file_path": "", "duration_min": 8,
+            "cr_valide": cr_valide, "nom_a_saisir": nom_a_saisir,
+            "cr_elements": elements or {"motif": ["x"], "observations": [],
+                                        "traitements": [], "suivi": []},
+            "entries": [["10:00:01", "Patient", "bonjour"]], "annexes": []}
+
+
+def test_validation_groupee(monkeypatch, tmp_path):
+    import transcription_consultation as tc
+    chemin = os.path.join(tmp_path, "consultations.json")
+    monkeypatch.setattr(tc, "chemin_consultations", lambda: chemin)
+    for cid in ("a", "b", "c"):
+        storage.ajouter_consultation(chemin, _rec_v(cid, nom=cid.upper()))
+    api = tc.Api()
+
+    res = api.valider_cr_groupe([
+        {"cid": "a", "elements": {"motif": ["mal de gorge"], "observations": [],
+                                   "traitements": [], "suivi": []}},
+        {"cid": "b", "elements": {"motif": ["fièvre"], "observations": [],
+                                   "traitements": [], "suivi": []}},
+        {"cid": "c", "elements": {"motif": ["toux"], "observations": [],
+                                   "traitements": [], "suivi": []}},
+    ])
+    assert res["ok"]
+    assert sorted(res["valides"]) == ["a", "b", "c"]
+    assert res["ignores"] == []
+    data = {c["id"]: c for c in storage.charger_consultations(chemin)}
+    assert all(data[cid]["cr_valide"] is True for cid in ("a", "b", "c"))
+    assert "- mal de gorge" in data["a"]["summary"]
+    assert "- fièvre" in data["b"]["summary"]
+
+
+def test_groupee_ignore_sans_nom(monkeypatch, tmp_path):
+    import transcription_consultation as tc
+    chemin = os.path.join(tmp_path, "consultations.json")
+    monkeypatch.setattr(tc, "chemin_consultations", lambda: chemin)
+    storage.ajouter_consultation(chemin, _rec_v("a", nom="MARTIN"))
+    storage.ajouter_consultation(chemin, _rec_v("b", nom="DURAND"))
+    # 3e sans nom (libellé provisoire + flag).
+    storage.ajouter_consultation(chemin, _rec_v(
+        "c", nom="Consultation de 9h15", nom_a_saisir=True))
+    api = tc.Api()
+
+    res = api.valider_cr_groupe([
+        {"cid": "a", "elements": {"motif": ["m"], "observations": [], "traitements": [], "suivi": []}},
+        {"cid": "b", "elements": {"motif": ["m"], "observations": [], "traitements": [], "suivi": []}},
+        {"cid": "c", "elements": {"motif": ["m"], "observations": [], "traitements": [], "suivi": []}, "nom": ""},
+    ])
+    assert sorted(res["valides"]) == ["a", "b"]
+    assert res["ignores"] == ["c"]
+    data = {c["id"]: c for c in storage.charger_consultations(chemin)}
+    assert data["a"]["cr_valide"] is True and data["b"]["cr_valide"] is True
+    # La 3e reste dans la file (non validée, toujours à nommer).
+    assert data["c"]["cr_valide"] is False
+    assert data["c"]["nom_a_saisir"] is True
+
+
+def test_groupee_nomme_puis_valide(monkeypatch, tmp_path):
+    """Un nom saisi en ligne → la consultation est nommée PUIS validée."""
+    import transcription_consultation as tc
+    chemin = os.path.join(tmp_path, "consultations.json")
+    monkeypatch.setattr(tc, "chemin_consultations", lambda: chemin)
+    storage.ajouter_consultation(chemin, _rec_v(
+        "c", nom="Consultation de 9h15", nom_a_saisir=True))
+    api = tc.Api()
+    res = api.valider_cr_groupe([
+        {"cid": "c", "elements": {"motif": ["m"], "observations": [], "traitements": [], "suivi": []},
+         "nom": "LEROY", "prenom": "Emma"},
+    ])
+    assert res["valides"] == ["c"]
+    c = storage.charger_consultations(chemin)[0]
+    assert c["cr_valide"] is True and c["nom_a_saisir"] is False
+    assert c["patient"]["nom"] == "LEROY" and c["patient"]["prenom"] == "Emma"
+
+
+def test_decochage_dans_liste(monkeypatch, tmp_path):
+    """Un élément décoché (absent des elements envoyés) n'apparaît pas dans
+    le résumé validé."""
+    import transcription_consultation as tc
+    chemin = os.path.join(tmp_path, "consultations.json")
+    monkeypatch.setattr(tc, "chemin_consultations", lambda: chemin)
+    storage.ajouter_consultation(chemin, _rec_v("a", nom="MARTIN"))
+    api = tc.Api()
+    # L'IA proposait « hallucination » ; le médecin l'a décochée en liste.
+    api.valider_cr_groupe([
+        {"cid": "a", "elements": {"motif": ["vrai motif"], "observations": [],
+                                   "traitements": [], "suivi": []}},
+    ])
+    c = storage.charger_consultations(chemin)[0]
+    assert "vrai motif" in c["summary"]
+    assert "hallucination" not in c["summary"]

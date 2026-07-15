@@ -384,6 +384,29 @@
   </div>
 
   <!-- ═══════════════════════════════════════════════
+       VUE : VALIDATION GROUPÉE (tout voir en liste)
+       ═══════════════════════════════════════════════ -->
+  <div data-view="batch-cr" class="hidden" style="flex:1;display:flex;flex-direction:column;">
+    <div class="page-header" style="display:flex;align-items:center;gap:14px;">
+      <button class="btn btn-secondary btn-sm" id="batch-back" style="flex-shrink:0;">← Retour</button>
+      <div>
+        <div class="page-title">Comptes-rendus à valider</div>
+        <div class="page-subtitle" id="batch-sub">Vérifiez chaque compte-rendu avant de valider — rien n'est enregistré sans votre contrôle.</div>
+      </div>
+    </div>
+    <div class="section flex-1" style="overflow-y:auto;">
+      <div style="max-width:820px;margin:0 auto;width:100%;">
+        <div id="batch-list"></div>
+        <div id="batch-warn-noname" class="batch-warn hidden"></div>
+        <div style="position:sticky;bottom:0;padding:14px 0 24px;background:linear-gradient(to top, var(--bg-main) 70%, transparent);">
+          <button class="btn btn-primary" id="batch-validate" style="padding:12px 20px;font-size:15px;">✓ Valider les comptes-rendus affichés</button>
+          <span style="margin-left:12px;color:var(--txt-secondary);font-size:12.5px;">Raccourci : Ctrl+Entrée</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
        VUE : NOMMER LES CONSULTATIONS (saisie en série)
        ═══════════════════════════════════════════════ -->
   <div data-view="name-cr" class="hidden" style="flex:1;display:flex;flex-direction:column;">
@@ -630,6 +653,31 @@
     <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
       <button class="btn btn-primary" id="next-patient" style="padding:12px;">+ Patient suivant</button>
       <button class="btn btn-secondary" id="next-home" style="padding:12px;">Retour à l'accueil</button>
+    </div>
+  </div>
+</div>
+
+<!-- Choix du mode de rattrapage (depuis le bandeau « à compléter ») -->
+<div id="complete-mode-modal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:460px;text-align:center;">
+    <div class="confirm-title">Reprendre les consultations</div>
+    <div class="confirm-sub">Comment voulez-vous les compléter ?</div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="cm-one-by-one" style="padding:12px;">Compléter une par une</button>
+      <button class="btn btn-secondary" id="cm-list" style="padding:12px;">Tout voir en liste</button>
+      <button class="btn btn-secondary" id="cm-cancel" style="padding:10px;border:none;">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmation avant validation groupée -->
+<div id="batch-confirm-modal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:460px;">
+    <div class="confirm-title" id="batch-confirm-title">Valider les comptes-rendus</div>
+    <div class="confirm-sub" id="batch-confirm-sub"></div>
+    <div class="confirm-actions" style="margin-top:18px;">
+      <button class="btn btn-secondary" id="batch-confirm-cancel">Annuler</button>
+      <button class="btn btn-primary" id="batch-confirm-ok">Confirmer</button>
     </div>
   </div>
 </div>
@@ -1080,9 +1128,20 @@ async function loadCompletionPending() {
   if (!n) { hide(el); return; }
   const s = n > 1 ? 's' : '';
   el.textContent = '📋 ' + n + ' consultation' + s + ' à compléter — cliquez pour reprendre';
-  el.onclick = () => demarrerSerieRattrapage(null, 'accueil');
+  el.onclick = () => show($('complete-mode-modal'));
   show(el);
 }
+
+/* Choix du mode de rattrapage : une par une (défaut) ou tout voir en liste. */
+$('cm-one-by-one').addEventListener('click', () => {
+  hide($('complete-mode-modal'));
+  demarrerSerieRattrapage(null, 'accueil');
+});
+$('cm-list').addEventListener('click', () => {
+  hide($('complete-mode-modal'));
+  openBatchScreen();
+});
+$('cm-cancel').addEventListener('click', () => hide($('complete-mode-modal')));
 
 /* Avatar médecin : initiales dérivées du nom (ex. "Dr Besma" → "DB"). */
 function setDoctorIdentity(nom, specialite) {
@@ -1644,6 +1703,12 @@ async function vcrSortie(action) {
     else serieApresValidation();
     return;
   }
+  if (_vcrOrigine === 'batch') {
+    // « Voir le détail » depuis la validation groupée : retour à la liste,
+    // qui reflète l'état à jour (la consultation validée en disparaît).
+    await openBatchScreen();
+    return;
+  }
   if (_vcrOrigine === 'fiche') {
     // Depuis l'historique : retour à la fiche de la consultation, à jour.
     const data = (await api('get_consultations')) || [];
@@ -1827,6 +1892,216 @@ async function finSerie(msg) {
   navigate('home');
   if (msg && s && s.finMode !== 'fiche') toastAccueil(msg);
 }
+
+/* ------------------------------------------------------------------ */
+/*  Validation groupée (« Tout voir en liste »)                       */
+/*  Le médecin VOIT chaque compte-rendu en entier, décoche/nomme au   */
+/*  besoin, puis valide en un geste — jamais de « tout valider »      */
+/*  aveugle. Une consultation sans nom n'est pas validée.             */
+/* ------------------------------------------------------------------ */
+
+const VCR_CATS_MIN = VCR_CATS;   // [motif, observations, traitements, suivi]
+let _batch = [];                 // consultations affichées (données brutes)
+
+async function openBatchScreen() {
+  const data = (await api('get_consultations')) || [];
+  const incompletes = data.filter(_estIncomplete);
+  if (!incompletes.length) { await loadHome(); navigate('home'); return; }
+  // Détails de nommage (extrait + suggestion) pour les consultations sans nom.
+  const nomm = {};
+  ((await api('get_consultations_a_nommer')) || []).forEach(d => { nomm[d.id] = d; });
+  _batch = incompletes.map(c => ({ rec: c, nomm: nomm[c.id] || null }));
+  navigate('batch-cr');
+  renderBatch();
+}
+
+function batchCardCr(cid, elements) {
+  // Compte-rendu compact : 4 catégories, éléments cochés, décochables.
+  const wrap = document.createElement('div');
+  wrap.className = 'batch-cr-grid';
+  VCR_CATS_MIN.forEach(([cat, titre]) => {
+    const items = (elements && elements[cat]) || [];
+    if (!items.length) return;
+    const col = document.createElement('div');
+    col.className = 'batch-cr-cat'; col.dataset.cat = cat;
+    const h = document.createElement('div');
+    h.className = 'batch-cr-cat-name'; h.textContent = titre;
+    col.appendChild(h);
+    items.forEach(txt => {
+      const douteux = /^\s*\[\?\]/.test(txt);
+      const row = document.createElement('label');
+      row.className = 'batch-item' + (douteux ? ' douteux' : '');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = true; cb.dataset.cid = cid;
+      cb.addEventListener('change', () => row.classList.toggle('off', !cb.checked));
+      const span = document.createElement('span');
+      span.className = 'batch-item-txt'; span.textContent = txt;
+      row.appendChild(cb); row.appendChild(span);
+      col.appendChild(row);
+    });
+    wrap.appendChild(col);
+  });
+  if (!wrap.children.length) {
+    const vide = document.createElement('div');
+    vide.className = 'cr-empty';
+    vide.textContent = 'Aucun élément extrait — ouvrez le détail pour compléter.';
+    wrap.appendChild(vide);
+  }
+  return wrap;
+}
+
+function renderBatch() {
+  const list = $('batch-list');
+  list.innerHTML = '';
+  _batch.forEach(({ rec, nomm }) => {
+    const p = rec.patient || {};
+    const aNommer = rec.nom_a_saisir === true;
+    const card = document.createElement('div');
+    card.className = 'batch-card';
+    card.dataset.cid = rec.id;
+
+    // En-tête : nom (ou libellé provisoire) + heure + durée + lien détail.
+    const head = document.createElement('div');
+    head.className = 'batch-card-head';
+    const titre = document.createElement('div');
+    titre.className = 'batch-card-title' + (aNommer ? ' provisoire' : '');
+    titre.textContent = ((p.nom || '') + ' ' + (p.prenom || '')).trim() || '—';
+    const meta = document.createElement('span');
+    meta.className = 'batch-card-meta';
+    meta.textContent = timeHM(rec.date) + (rec.duration_min ? ' · ' + rec.duration_min + ' min' : '');
+    const detail = document.createElement('button');
+    detail.className = 'batch-detail-link'; detail.textContent = 'Voir le détail →';
+    detail.addEventListener('click', () => {
+      // Édition fine dans l'écran de validation, retour à la liste ensuite.
+      openValidationScreen(rec.id, { origine: 'batch' });
+    });
+    head.appendChild(titre); head.appendChild(meta);
+    head.appendChild(detail);
+    card.appendChild(head);
+
+    // Champ nom inline si la consultation n'est pas nommée (suggestion IA).
+    if (aNommer) {
+      const nrow = document.createElement('div');
+      nrow.className = 'batch-name-row';
+      const nomInp = document.createElement('input');
+      nomInp.type = 'text'; nomInp.className = 'batch-name'; nomInp.placeholder = 'Nom du patient…';
+      nomInp.dataset.role = 'nom';
+      const preInp = document.createElement('input');
+      preInp.type = 'text'; preInp.className = 'batch-name batch-prenom'; preInp.placeholder = 'Prénom';
+      preInp.dataset.role = 'prenom';
+      const s = nomm && nomm.nom_suggere;
+      if (s && s.nom && s.confiance === 'haute') {
+        nomInp.value = s.nom; preInp.value = s.prenom || '';
+        const badge = document.createElement('span');
+        badge.className = 'batch-suggere'; badge.textContent = '✨ suggéré';
+        nrow.appendChild(nomInp); nrow.appendChild(preInp); nrow.appendChild(badge);
+      } else {
+        if (s && s.nom) nomInp.placeholder = s.nom + ' ?';
+        nrow.appendChild(nomInp); nrow.appendChild(preInp);
+      }
+      // Compteurs dynamiques : saisir/effacer un nom change le nombre validable.
+      nomInp.addEventListener('input', updateBatchCounters);
+      card.appendChild(nrow);
+    }
+
+    card.appendChild(batchCardCr(rec.id, rec.cr_elements));
+    list.appendChild(card);
+  });
+  updateBatchCounters();
+}
+
+/* Compteurs = état RÉEL des champs nom (suggestion pré-remplie comprise) :
+   une carte sans nom saisi n'est pas validable ; toutes les autres le sont. */
+function updateBatchCounters() {
+  let sansNom = 0, validables = 0;
+  document.querySelectorAll('#batch-list .batch-card').forEach(card => {
+    const rec = (_batch.find(b => b.rec.id === card.dataset.cid) || {}).rec;
+    if (!rec) return;
+    if (rec.nom_a_saisir === true) {
+      const nomEl = card.querySelector('.batch-name[data-role="nom"]');
+      if (!nomEl || !nomEl.value.trim()) { sansNom++; return; }
+    }
+    validables++;
+  });
+  const warn = $('batch-warn-noname');
+  if (sansNom > 0) {
+    const s = sansNom > 1 ? 's' : '';
+    warn.textContent = '⚠ ' + sansNom + ' consultation' + s + ' sans nom ne ser' +
+      (sansNom > 1 ? 'ont' : 'a') + ' pas validée' + s +
+      ' — saisissez un nom ci-dessus, ou complétez-la plus tard.';
+    show(warn);
+  } else hide(warn);
+  $('batch-validate').textContent = '✓ Valider les ' + validables + ' compte' +
+    (validables > 1 ? 's-rendus' : '-rendu') + ' affiché' + (validables > 1 ? 's' : '');
+  $('batch-validate').disabled = (validables === 0);
+}
+
+/* Collecte l'état actuel de la liste (éléments cochés + noms saisis). */
+function collectBatch() {
+  const items = [];
+  document.querySelectorAll('#batch-list .batch-card').forEach(card => {
+    const cid = card.dataset.cid;
+    const rec = (_batch.find(b => b.rec.id === cid) || {}).rec;
+    if (!rec) return;
+    const aNommer = rec.nom_a_saisir === true;
+    let nom = '', prenom = '';
+    if (aNommer) {
+      nom = (card.querySelector('.batch-name[data-role="nom"]') || {}).value || '';
+      prenom = (card.querySelector('.batch-prenom') || {}).value || '';
+      nom = nom.trim();
+    }
+    // Consultation sans nom → ignorée (pas de CR au dossier sans patient).
+    if (aNommer && !nom) return;
+    const elements = {};
+    VCR_CATS_MIN.forEach(([cat]) => { elements[cat] = []; });
+    card.querySelectorAll('.batch-cr-cat').forEach(col => {
+      const cat = col.dataset.cat;
+      col.querySelectorAll('.batch-item').forEach(row => {
+        const cb = row.querySelector('input[type="checkbox"]');
+        const txt = row.querySelector('.batch-item-txt').textContent.trim();
+        if (cb.checked && txt) elements[cat].push(txt);
+      });
+    });
+    items.push({ cid, elements, nom, prenom });
+  });
+  return items;
+}
+
+$('batch-back').addEventListener('click', async () => {
+  await loadHome(); navigate('home');
+});
+
+$('batch-validate').addEventListener('click', () => {
+  const items = collectBatch();
+  if (!items.length) return;
+  $('batch-confirm-title').textContent =
+    'Vous allez valider ' + items.length + ' compte' + (items.length > 1 ? 's-rendus' : '-rendu');
+  $('batch-confirm-sub').textContent =
+    'Vérifiez qu\'ils sont corrects — ils seront enregistrés au dossier patient.';
+  show($('batch-confirm-modal'));
+});
+
+$('batch-confirm-cancel').addEventListener('click', () => hide($('batch-confirm-modal')));
+
+$('batch-confirm-ok').addEventListener('click', async () => {
+  const btn = $('batch-confirm-ok');
+  btn.disabled = true; btn.textContent = 'Validation…';
+  const res = await api('valider_cr_groupe', collectBatch());
+  btn.disabled = false; btn.textContent = 'Confirmer';
+  hide($('batch-confirm-modal'));
+  const nb = (res && res.valides) ? res.valides.length : 0;
+  await loadHome();
+  navigate('home');
+  toastAccueil(nb + ' compte' + (nb > 1 ? 's-rendus validés' : '-rendu validé') + ' ✓');
+});
+
+/* Raccourci Ctrl+Entrée sur la vue batch. */
+document.addEventListener('keydown', e => {
+  if (currentView === 'batch-cr' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (!$('batch-validate').disabled) $('batch-validate').click();
+  }
+});
 
 /* Message sobre et éphémère en haut de l'accueil. */
 let _toastTimer = null;

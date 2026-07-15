@@ -853,6 +853,60 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 [data-theme="dark"] .badge-acompleter { background: #3a2d10; color: #f0c674; border-color: #5a4a20; }
 .pname-provisoire { font-style: italic; color: var(--txt-secondary); font-weight: 500; }
 
+/* ── Validation groupée (vue batch) ── */
+.batch-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 14px 18px; margin-bottom: 12px;
+  box-shadow: var(--shadow-card);
+}
+.batch-card-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.batch-card-title { font-size: 15px; font-weight: 700; color: var(--txt-primary); }
+.batch-card-title.provisoire { font-style: italic; color: var(--txt-secondary); font-weight: 600; }
+.batch-card-meta { font-size: 12px; color: var(--txt-secondary); }
+.batch-detail-link {
+  margin-left: auto; border: none; background: transparent; cursor: pointer;
+  color: var(--accent); font-family: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+}
+.batch-detail-link:hover { background: var(--accent-lt); }
+.batch-name-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+.batch-name {
+  background: var(--bg-main); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--txt-primary); font-family: inherit; font-size: 13px; padding: 6px 10px; outline: none;
+}
+.batch-name:focus { border-color: var(--accent); }
+.batch-name[data-role="nom"] { flex: 1.4; }
+.batch-prenom { flex: 1; }
+.batch-suggere {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-lt); color: var(--accent); flex-shrink: 0;
+}
+/* Compte-rendu compact : 4 catégories en grille scannable */
+.batch-cr-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 22px;
+}
+.batch-cr-cat-name {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 3px;
+}
+.batch-item {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 12.5px; line-height: 1.5; color: var(--txt-primary);
+  padding: 1px 0; cursor: pointer;
+}
+.batch-item input[type="checkbox"] { margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; cursor: pointer; }
+.batch-item.off { opacity: 0.4; }
+.batch-item.off .batch-item-txt { text-decoration: line-through; }
+/* Élément douteux (issu d'une ligne [?]) → orange pour attirer l'œil */
+.batch-item.douteux .batch-item-txt { color: var(--warn); }
+.batch-warn {
+  font-size: 12.5px; padding: 9px 12px; border-radius: var(--r-md); margin-bottom: 12px;
+  background: #FDF3E2; color: #A8690F; border: 1px solid #EED9B8;
+}
+[data-theme="dark"] .batch-warn { background: #3a2d10; color: #f0c674; border-color: #5a4a20; }
+@media (max-width: 620px) { .batch-cr-grid { grid-template-columns: 1fr; } }
+
+
 /* Bandeau « à nommer » (accueil) — bleu */
 /* Toast éphémère de l'accueil (fin de série de rattrapage) */
 .home-toast {

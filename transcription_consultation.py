@@ -2648,6 +2648,39 @@ class Api:
         return {"count": len(en_attente),
                 "dernier_id": en_attente[0].get("id") if en_attente else None}
 
+    def valider_cr_groupe(self, items):
+        """Validation groupée (vue « Tout voir en liste »).
+
+        `items` : [{cid, elements, nom?, prenom?}] — les comptes-rendus que le
+        médecin a VUS et confirmés en liste, avec leurs éléments cochés.
+
+        RÈGLE : une consultation sans patient identifié (nom_a_saisir et aucun
+        nom saisi en ligne) est IGNORÉE — jamais de compte-rendu au dossier
+        sans nom. Si un nom est fourni, la consultation est nommée puis validée.
+
+        Retourne {ok, valides: [cid...], ignores: [cid...]}."""
+        by_id = {c.get("id"): c
+                 for c in storage.charger_consultations(chemin_consultations())
+                 if isinstance(c, dict)}
+        valides, ignores = [], []
+        for it in items or []:
+            cid = it.get("cid")
+            record = by_id.get(cid)
+            if not record:
+                continue
+            if record.get("nom_a_saisir"):
+                nom = (it.get("nom") or "").strip()
+                if not nom:
+                    ignores.append(cid)          # pas de nom → pas de validation
+                    continue
+                r = self.nommer_consultation(cid, nom, it.get("prenom", ""))
+                if not r.get("ok"):
+                    ignores.append(cid)
+                    continue
+            r = self.valider_cr(cid, it.get("elements") or {})
+            (valides if r.get("ok") else ignores).append(cid)
+        return {"ok": True, "valides": valides, "ignores": ignores}
+
     def finalize_with_resume(self, resume_text):
         """Réécrit le .docx déjà sauvegardé en y ajoutant le résumé en tête,
         au même emplacement, et met à jour le journal. Le document existe
