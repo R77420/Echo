@@ -210,6 +210,10 @@
             <select id="obs-mic"></select>
           </div>
         </div>
+        <div>
+          <button class="btn btn-secondary" id="obs-mictest-btn">🎙 Testez votre microphone</button>
+          <div id="obs-mictest-result" class="mictest-inline hidden"></div>
+        </div>
         <div id="obs-banner" class="hidden"></div>
       </div>
     </div>
@@ -460,6 +464,21 @@
       <div style="max-width:580px;display:flex;flex-direction:column;gap:28px;">
 
         <div>
+          <div class="section-title">Démarrage</div>
+          <label class="switch-row" for="set-startup">
+            <input type="checkbox" id="set-startup">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-label">
+              <span class="switch-title">Lancer Écho au démarrage de Windows</span>
+              <span class="switch-desc">Écho sera prêt dès l'ouverture de votre session, dans la barre système.</span>
+            </span>
+          </label>
+          <div id="set-startup-err" class="set-empty hidden" style="margin-top:8px;color:var(--danger);border-color:var(--danger);"></div>
+        </div>
+
+        <div class="section-divider" style="margin:0;"></div>
+
+        <div>
           <div class="section-title">Apparence</div>
           <div class="field">
             <label class="field-label">Thème de l'interface</label>
@@ -511,6 +530,9 @@
           <div class="field" style="margin-bottom:14px;">
             <label class="field-label">Microphone</label>
             <select id="set-mic"></select>
+            <div id="set-mic-empty" class="set-empty hidden">Aucun microphone détecté</div>
+            <button class="btn btn-secondary btn-sm" id="set-mictest-btn" style="margin-top:10px;">🎙 Tester votre microphone</button>
+            <div id="set-mictest-result" class="mictest-inline hidden"></div>
           </div>
           <div class="field">
             <label class="field-label">Volume micro</label>
@@ -701,6 +723,66 @@
     <div id="mode-banner" class="banner banner-err hidden" style="margin-bottom:12px;"></div>
     <div class="confirm-actions">
       <button class="btn btn-secondary" id="mode-cancel">Annuler</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modale : aucun microphone détecté (adaptée au mode) -->
+<div id="nomic-modal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:440px;text-align:center;">
+    <div class="nomic-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
+    </div>
+    <div class="confirm-title" id="nomic-title">Aucun microphone détecté</div>
+    <div class="confirm-sub" id="nomic-msg" style="margin-top:6px;"></div>
+    <div id="nomic-hint" class="banner banner-err hidden" style="margin:12px 0 0;"></div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="nomic-retry" style="padding:12px;">Réessayer</button>
+      <button class="btn btn-secondary" id="nomic-continue" style="padding:12px;">Continuer quand même</button>
+      <button class="btn btn-secondary" id="nomic-back" style="padding:10px;border:none;">Retour</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Test du microphone ───────────────────────────────────── -->
+<div id="mictest-modal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:520px;">
+    <div class="confirm-title" style="text-align:center;">Testez votre microphone</div>
+    <div class="confirm-sub" style="margin-top:8px;text-align:center;">
+      Éloignez-vous d'environ un mètre — comme le sera votre patient —
+      et lisez cette phrase à voix normale&nbsp;:
+    </div>
+    <div class="mictest-phrase">« Bonjour, je viens vous voir car j'ai mal à la gorge depuis trois jours. »</div>
+
+    <!-- Onde animée pendant l'enregistrement -->
+    <div id="mictest-wave" class="mictest-wave hidden" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div id="mictest-countdown" class="mictest-countdown hidden"></div>
+
+    <!-- Verdict (après le test) -->
+    <div id="mictest-verdict" class="mictest-verdict hidden"></div>
+
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="mictest-start" style="padding:12px;">🎙 Démarrer le test</button>
+      <button class="btn btn-secondary" id="mictest-close" style="padding:10px;border:none;">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Proposer le test avant la 1re consultation au cabinet ─── -->
+<div id="mictest-prompt" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:440px;text-align:center;">
+    <div class="confirm-title">Tester votre microphone d'abord&nbsp;?</div>
+    <div class="confirm-sub" style="margin-top:8px;">
+      Le mode cabinet capte votre patient à distance. Un test rapide
+      confirme que votre micro est adapté avant de commencer.
+    </div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="mictest-prompt-test" style="padding:12px;">Tester d'abord</button>
+      <button class="btn btn-secondary" id="mictest-prompt-skip" style="padding:10px;">Continuer sans tester</button>
     </div>
   </div>
 </div>
@@ -1474,21 +1556,239 @@ function openModeModal(dernierMode) {
 $('mode-cancel').addEventListener('click', () => hide($('mode-modal')));
 
 document.querySelectorAll('.mode-card').forEach(card => {
-  card.addEventListener('click', async () => {
-    const mode = card.dataset.mode;
-    document.querySelectorAll('.mode-card').forEach(c => c.style.pointerEvents = 'none');
-    clearBanner($('mode-banner'));
-    const res = await api('begin_consultation', mode);
-    document.querySelectorAll('.mode-card').forEach(c => c.style.pointerEvents = '');
-    if (res && res.ok) {
-      hide($('mode-modal'));
-    } else {
-      const b = $('mode-banner');
-      b.className = 'banner banner-err';
-      b.textContent = (res && res.error) || 'Impossible de démarrer la consultation.';
-      show(b);
+  card.addEventListener('click', () => lancerConsultation(card.dataset.mode));
+});
+
+/* Démarre une consultation après vérification du micro.
+   - Cabinet sans micro : modale bloquante [Réessayer] [Retour].
+   - Télé sans micro : modale informative [Continuer quand même] [Réessayer]. */
+async function lancerConsultation(mode) {
+  const check = await api('verifier_micro');
+  const micPresent = !check || check.mic_present !== false;   // sûr par défaut
+  if (!micPresent) {
+    ouvrirModaleNoMic(mode);
+    return;
+  }
+  // Cabinet : si le micro n'a jamais été testé, proposer un test d'abord.
+  if (mode === 'cabinet') {
+    const t = await api('mic_test_fait');
+    if (t && t.fait === false) {
+      $('mictest-prompt').dataset.mode = mode;
+      show($('mictest-prompt'));
+      return;
     }
-  });
+  }
+  await demarrerConsultation(mode);
+}
+
+$('mictest-prompt-skip').addEventListener('click', async () => {
+  hide($('mictest-prompt'));
+  await demarrerConsultation($('mictest-prompt').dataset.mode || 'cabinet');
+});
+$('mictest-prompt-test').addEventListener('click', () => {
+  hide($('mictest-prompt'));
+  // Après le test, l'utilisateur relance la consultation lui-même.
+  openMicTest('');
+});
+
+async function demarrerConsultation(mode) {
+  document.querySelectorAll('.mode-card').forEach(c => c.style.pointerEvents = 'none');
+  clearBanner($('mode-banner'));
+  const res = await api('begin_consultation', mode);
+  document.querySelectorAll('.mode-card').forEach(c => c.style.pointerEvents = '');
+  if (res && res.ok) {
+    hide($('mode-modal'));
+  } else if (res && res.erreur === 'no_mic') {
+    // Le micro a disparu entre la vérif et le démarrage (débranché) → modale.
+    ouvrirModaleNoMic(mode);
+  } else {
+    const b = $('mode-banner');
+    b.className = 'banner banner-err';
+    b.textContent = (res && res.error) || 'Impossible de démarrer la consultation.';
+    show(b);
+  }
+}
+
+/* Modale « aucun micro », adaptée au mode. */
+function ouvrirModaleNoMic(mode) {
+  const cabinet = (mode === 'cabinet');
+  $('nomic-title').textContent = 'Aucun microphone détecté';
+  $('nomic-msg').textContent = cabinet
+    ? "Écho a besoin d'un microphone pour capter la consultation. Branchez un micro ou un casque, puis réessayez."
+    : "Aucun microphone détecté — seule la voix du patient sera transcrite. Branchez un micro pour enregistrer aussi vos réponses.";
+  // Bouton secondaire : « Continuer quand même » en télé (mode dégradé),
+  // « Retour » en cabinet (bloquant).
+  const contBtn = $('nomic-continue');
+  if (cabinet) { hide(contBtn); }
+  else { show(contBtn); }
+  $('nomic-modal').dataset.mode = mode;
+  show($('nomic-modal'));
+}
+
+$('nomic-retry').addEventListener('click', async () => {
+  const mode = $('nomic-modal').dataset.mode;
+  const check = await api('verifier_micro');
+  if (check && check.mic_present) {
+    hide($('nomic-modal'));
+    await demarrerConsultation(mode);
+  } else {
+    // Toujours pas de micro : signaler sans fermer.
+    const el = $('nomic-hint');
+    el.textContent = 'Toujours aucun micro détecté. Vérifiez le branchement.';
+    show(el);
+    setTimeout(() => hide(el), 3000);
+  }
+});
+$('nomic-continue').addEventListener('click', async () => {
+  // Télé uniquement : démarrer en mode patient seul, l'utilisateur est prévenu.
+  hide($('nomic-modal'));
+  await demarrerConsultation($('nomic-modal').dataset.mode);
+});
+$('nomic-back').addEventListener('click', () => hide($('nomic-modal')));
+
+/* ---- Test du microphone (onboarding + Paramètres) ---------------- */
+
+let _micTestPoll = null;
+let _micTestTarget = null;   // élément inline où recopier le verdict (facultatif)
+
+/* Ouvre la modale de test. micName = micro à tester ('' = défaut) ;
+   inlineEl = élément optionnel recevant aussi le résumé du verdict. */
+function openMicTest(micName, inlineEl) {
+  _micTestTarget = inlineEl || null;
+  $('mictest-modal').dataset.mic = micName || '';
+  resetMicTestUI();
+  show($('mictest-modal'));
+}
+
+function resetMicTestUI() {
+  hide($('mictest-wave'));
+  hide($('mictest-countdown'));
+  hide($('mictest-verdict'));
+  const start = $('mictest-start');
+  start.disabled = false;
+  start.textContent = '🎙 Démarrer le test';
+  show(start);
+}
+
+function stopMicTestPoll() {
+  if (_micTestPoll) { clearInterval(_micTestPoll); _micTestPoll = null; }
+}
+
+$('mictest-close').addEventListener('click', () => {
+  stopMicTestPoll();
+  hide($('mictest-modal'));
+});
+
+$('mictest-start').addEventListener('click', async () => {
+  const start = $('mictest-start');
+  start.disabled = true;
+  hide($('mictest-verdict'));
+  const res = await api('demarrer_test_micro', $('mictest-modal').dataset.mic || '');
+  if (!res || res.ok === false) {
+    start.disabled = false;
+    renderMicVerdict({ verdict: 'insuffisant', texte: '',
+                       _err: "Aucun microphone détecté." });
+    return;
+  }
+  // Enregistrement en cours : onde + compte à rebours 5 s.
+  show($('mictest-wave'));
+  const cd = $('mictest-countdown');
+  show(cd);
+  let reste = 5;
+  cd.textContent = 'Enregistrement… ' + reste + ' s';
+  start.textContent = 'Enregistrement en cours…';
+  stopMicTestPoll();
+  _micTestPoll = setInterval(async () => {
+    const st = await api('get_test_micro_status');
+    if (!st) return;
+    // Animer l'onde selon le niveau instantané (0..~0.1 → 0..1).
+    if (st.level != null) {
+      const amp = Math.min(1, st.level * 12);
+      $('mictest-wave').style.setProperty('--amp', amp.toFixed(2));
+    }
+    if (st.status === 'running') {
+      // compte à rebours approximatif
+      reste = Math.max(0, reste - 0.15);
+      cd.textContent = 'Enregistrement… ' + Math.ceil(reste) + ' s';
+    } else if (st.status === 'done') {
+      stopMicTestPoll();
+      hide($('mictest-wave'));
+      cd.textContent = 'Analyse de la transcription…';
+      renderMicVerdict(st);
+    } else if (st.status === 'error') {
+      stopMicTestPoll();
+      hide($('mictest-wave'));
+      hide(cd);
+      renderMicVerdict({ verdict: 'insuffisant', texte: '',
+                         _err: "L'enregistrement a échoué." });
+    }
+  }, 150);
+});
+
+const _MICVERDICTS = {
+  adapte: {
+    icon: '✅', cls: 'ok',
+    msg: "Votre microphone est adapté aux consultations au cabinet."
+  },
+  faible: {
+    icon: '⚠️', cls: 'warn',
+    msg: "Votre microphone capte, mais faiblement. La transcription risque "
+       + "d'être incomplète si le patient parle doucement. Un micro USB posé "
+       + "sur le bureau (à partir de 25 €) améliorerait nettement le résultat."
+  },
+  insuffisant: {
+    icon: '❌', cls: 'bad',
+    msg: "Votre microphone ne capte pas suffisamment à cette distance. "
+       + "Le mode cabinet nécessite un micro externe. La téléconsultation "
+       + "reste utilisable normalement."
+  }
+};
+
+/* Affiche le verdict + la transcription obtenue (« le juge de paix »). */
+function renderMicVerdict(st) {
+  hide($('mictest-countdown'));
+  const start = $('mictest-start');
+  start.disabled = false;
+  start.textContent = '↻ Refaire le test';
+  show(start);
+
+  const v = _MICVERDICTS[st.verdict] || _MICVERDICTS.insuffisant;
+  const box = $('mictest-verdict');
+  box.className = 'mictest-verdict verdict-' + v.cls;
+  const texte = (st.texte || '').trim();
+  const transcriptionHtml = texte
+    ? '<div class="mictest-transcript"><div class="mictest-transcript-lbl">'
+      + 'Ce qu\'Écho a transcrit&nbsp;:</div><div class="mictest-transcript-txt">« '
+      + escapeHtml(texte) + ' »</div></div>'
+    : '<div class="mictest-transcript"><div class="mictest-transcript-lbl">'
+      + 'Aucune parole n\'a été transcrite.</div></div>';
+  box.innerHTML =
+    '<div class="mictest-verdict-head"><span class="mictest-verdict-icon">'
+    + v.icon + '</span><span>' + v.msg + '</span></div>'
+    + (st._err ? '' : transcriptionHtml);
+  show(box);
+
+  // Recopier un résumé compact dans l'emplacement inline (Paramètres/onboarding).
+  if (_micTestTarget) {
+    _micTestTarget.className = 'mictest-inline verdict-' + v.cls;
+    _micTestTarget.textContent = v.icon + ' ' + v.msg;
+    show(_micTestTarget);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+$('set-mictest-btn').addEventListener('click', () => {
+  const mic = ($('set-mic') && $('set-mic').value) || '';
+  openMicTest(mic, $('set-mictest-result'));
+});
+$('obs-mictest-btn').addEventListener('click', () => {
+  const mic = ($('obs-mic') && $('obs-mic').value) || '';
+  openMicTest(mic, $('obs-mictest-result'));
 });
 
 /* ---- Sélecteur de périphériques (premier usage uniquement) ---- */
@@ -2288,6 +2588,14 @@ async function loadSettings() {
   markThemeRadio(s.theme || 'light');
   populateSelect($('set-output'), s.outputs, s.selected_output);
   populateSelect($('set-mic'),    s.mics,    s.selected_mic);
+  // Aucun micro : message gris explicite au lieu d'une liste vide silencieuse.
+  const aucunMic = !s.mics || !s.mics.length;
+  $('set-mic').classList.toggle('hidden', aucunMic);
+  $('set-mic-empty').classList.toggle('hidden', !aucunMic);
+  // Démarrage Windows : l'état de la case reflète la clé RÉELLE du registre.
+  const st = await api('get_startup_state');
+  $('set-startup').checked = !!(st && st.enabled);
+  hide($('set-startup-err'));
   const gp = Math.round((s.gain_patient || 1.0) * 100);
   const gm = Math.round((s.gain_mic     || 1.0) * 100);
   $('set-gain-patient').value = gp; $('lbl-gain-patient').textContent = gp + '%';
@@ -2319,6 +2627,20 @@ $('set-gain-mic').addEventListener('input', function() {
 $('set-folder-btn').addEventListener('click', async () => {
   const res = await api('pick_folder');
   if (res && res.path) $('set-folder').value = res.path;
+});
+
+/* Démarrage Windows : appliqué immédiatement (écrit/supprime la clé de
+   registre). Fail-safe : échec → on remet la case dans son état réel + message. */
+$('set-startup').addEventListener('change', async function () {
+  const voulu = this.checked;
+  hide($('set-startup-err'));
+  const res = await api('set_startup', voulu);
+  if (!res || !res.ok) {
+    this.checked = !voulu;   // revenir à l'état réel
+    const el = $('set-startup-err');
+    el.textContent = 'Impossible de configurer le démarrage automatique.';
+    show(el);
+  }
 });
 
 $('btn-save-settings').addEventListener('click', async () => {

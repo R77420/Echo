@@ -2,7 +2,7 @@
 ; Transcription temps reel de consultation, 100% local.
 
 #define MyAppName "Écho"
-#define MyAppVersion "1.9.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "MOUSSA Rayane"
 #define MyAppExeName "Echo.exe"
 ; Dossier source du build onedir (surchargé via ISCC /DSrcDir=...).
@@ -30,6 +30,8 @@ Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+; Lancement au démarrage de Windows (coché par défaut).
+Name: "startup"; Description: "Lancer Écho au démarrage de Windows"; GroupDescription: "Démarrage :"
 
 [Files]
 ; Tout le contenu du build onedir, recursivement.
@@ -39,6 +41,14 @@ Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs 
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Registry]
+; Démarrage automatique (HKCU\...\Run) avec --tray si la case est cochée.
+; uninsdeletevalue nettoie la clé à la désinstallation.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+    ValueType: string; ValueName: "Echo"; \
+    ValueData: """{app}\{#MyAppExeName}"" --tray"; \
+    Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

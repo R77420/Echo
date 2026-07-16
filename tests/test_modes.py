@@ -70,14 +70,40 @@ def test_begin_consultation_mode_tele(monkeypatch):
     assert set(_labels_captures()) == {"Patient", "Medecin"}
 
 
-def test_mode_cabinet_sans_micro(monkeypatch):
+def test_pas_de_micro_mode_cabinet(monkeypatch):
+    """Micro absent en cabinet → {ok:false, erreur:'no_mic'} sans exception."""
     _prepare(monkeypatch)
     monkeypatch.setattr(tc, "resoudre_micro", lambda n: None)
     monkeypatch.setattr(tc, "micro_defaut", lambda: None)
     api = tc.Api()
     res = api.start("", "", mode="cabinet")
-    assert not res["ok"]
+    assert res["ok"] is False
+    assert res["erreur"] == "no_mic"
     assert "micro" in res["error"].lower()
+
+
+def test_pas_de_micro_mode_tele(monkeypatch):
+    """Micro absent en télé → la consultation démarre en mode patient seul
+    (loopback) avec un flag d'avertissement, sans exception."""
+    _prepare(monkeypatch)
+    monkeypatch.setattr(tc, "resoudre_micro", lambda n: None)
+    monkeypatch.setattr(tc, "micro_defaut", lambda: None)
+    api = tc.Api()
+    res = api.start("", "SortieTest", mode="tele")
+    assert res["ok"] is True
+    assert res.get("mic_absent") is True
+    assert "warning" in res
+    # Seule la source patient (loopback) est capturée, pas de médecin.
+    assert _labels_captures() == ["Patient"]
+
+
+def test_verifier_micro(monkeypatch):
+    api = tc.Api()
+    monkeypatch.setattr(tc, "lister_micros", lambda: [])
+    assert api.verifier_micro()["mic_present"] is False
+    monkeypatch.setattr(tc, "lister_micros", lambda: [_FakeDevice("Mic1")])
+    r = api.verifier_micro()
+    assert r["mic_present"] is True and r["mics"] == ["Mic1"]
 
 
 # ------------------------------------------------ arrêt immédiat de la capture

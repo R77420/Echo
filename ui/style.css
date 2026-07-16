@@ -998,6 +998,34 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 .mode-card.preselected { border-color: var(--accent); }
 
 /* Coche de succès (modale post-consultation « Patient suivant ») */
+/* Interrupteur (toggle) — section Démarrage */
+.switch-row { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; }
+.switch-row input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track {
+  flex-shrink: 0; margin-top: 2px; width: 40px; height: 22px; border-radius: 999px;
+  background: var(--border); position: relative; transition: background var(--t);
+}
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  transition: transform var(--t);
+}
+.switch-row input:checked + .switch-track { background: var(--accent); }
+.switch-row input:checked + .switch-track .switch-thumb { transform: translateX(18px); }
+.switch-row input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-title { display: block; font-size: 14px; font-weight: 500; color: var(--txt-primary); }
+.switch-desc { display: block; font-size: 12.5px; color: var(--txt-secondary); margin-top: 2px; }
+
+.set-empty {
+  font-size: 13px; color: var(--txt-secondary); font-style: italic;
+  padding: 9px 12px; background: var(--bg-main);
+  border: 1px dashed var(--border); border-radius: var(--r-sm);
+}
+.nomic-icon {
+  width: 52px; height: 52px; margin: 0 auto 12px;
+  border-radius: 50%; background: rgba(192,57,43,0.10); color: var(--danger);
+  display: flex; align-items: center; justify-content: center;
+}
 .next-check {
   width: 44px; height: 44px; margin: 0 auto 12px;
   border-radius: 50%; background: var(--accent-lt); color: var(--accent);
@@ -1771,3 +1799,65 @@ input[type="range"] {
 }
 .sel-title { font-family: 'Fraunces', Georgia, serif; font-size: 20px; font-weight: 600; color: #F4F7F5; }
 .sel-sub   { font-size: 13px; color: var(--txt-dim); }
+
+/* ── Test du microphone (modale + résumés inline) ─────────────── */
+.mictest-phrase {
+  margin: 16px auto 4px; max-width: 440px; text-align: center;
+  font-family: 'Fraunces', Georgia, serif; font-size: 16px; line-height: 1.5;
+  color: var(--txt-primary); padding: 14px 18px;
+  background: var(--bg-main); border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+/* Onde animée : chaque barre pulse, amplitude pilotée par --amp (0..1). */
+.mictest-wave {
+  --amp: 0.2;
+  display: flex; align-items: center; justify-content: center;
+  gap: 4px; height: 56px; margin: 16px 0 4px;
+}
+.mictest-wave span {
+  width: 5px; border-radius: 3px; background: var(--accent, #2E7D6B);
+  height: calc(8px + var(--amp) * 40px);
+  animation: mictestBar 0.9s ease-in-out infinite;
+}
+.mictest-wave span:nth-child(2n)  { animation-delay: 0.12s; }
+.mictest-wave span:nth-child(3n)  { animation-delay: 0.24s; }
+.mictest-wave span:nth-child(4n)  { animation-delay: 0.36s; }
+.mictest-wave span:nth-child(5n)  { animation-delay: 0.48s; }
+@keyframes mictestBar {
+  0%, 100% { transform: scaleY(0.5); }
+  50%      { transform: scaleY(1); }
+}
+.mictest-countdown {
+  text-align: center; font-size: 13px; color: var(--txt-secondary);
+  margin-top: 4px;
+}
+.mictest-verdict {
+  margin-top: 16px; padding: 14px 16px; border-radius: var(--r-md);
+  border: 1px solid var(--border); background: var(--bg-main);
+  font-size: 13.5px; line-height: 1.5;
+}
+.mictest-verdict-head {
+  display: flex; gap: 10px; align-items: flex-start;
+  color: var(--txt-primary);
+}
+.mictest-verdict-icon { font-size: 18px; line-height: 1.2; flex-shrink: 0; }
+.mictest-verdict.verdict-ok   { border-color: #2E7D6B; background: rgba(46,125,107,0.08); }
+.mictest-verdict.verdict-warn { border-color: #C9962B; background: rgba(201,150,43,0.08); }
+.mictest-verdict.verdict-bad  { border-color: var(--danger); background: rgba(198,60,60,0.07); }
+.mictest-transcript {
+  margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border);
+}
+.mictest-transcript-lbl { font-size: 11.5px; color: var(--txt-secondary); text-transform: uppercase; letter-spacing: 0.4px; }
+.mictest-transcript-txt {
+  margin-top: 5px; font-family: 'Fraunces', Georgia, serif; font-size: 14px;
+  color: var(--txt-primary); font-style: italic;
+}
+/* Résumé compact sous les sélecteurs (Paramètres / onboarding). */
+.mictest-inline {
+  margin-top: 10px; padding: 9px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--border); font-size: 12.5px; line-height: 1.45;
+  color: var(--txt-secondary);
+}
+.mictest-inline.verdict-ok   { border-color: #2E7D6B; }
+.mictest-inline.verdict-warn { border-color: #C9962B; }
+.mictest-inline.verdict-bad  { border-color: var(--danger); }

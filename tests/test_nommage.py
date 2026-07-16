@@ -21,7 +21,10 @@ GROQ_OK = bool(correction.GROQ_API_KEY)
 
 # ------------------------------------------------ détection du nom (Groq réel)
 
-@pytest.mark.skipif(not GROQ_OK, reason="clé Groq absente")
+from conftest import groq_reel
+
+
+@groq_reel
 def test_detecter_nom_salutation():
     entries = [
         ("10:00:01", "Medecin", "Bonjour madame Dubois, comment allez-vous ?"),
@@ -33,7 +36,7 @@ def test_detecter_nom_salutation():
     assert d["confiance"] == "haute"
 
 
-@pytest.mark.skipif(not GROQ_OK, reason="clé Groq absente")
+@groq_reel
 def test_detecter_nom_absent():
     entries = [
         ("10:00:01", "Medecin", "Bonjour, qu'est-ce qui vous amène aujourd'hui ?"),
@@ -43,7 +46,7 @@ def test_detecter_nom_absent():
     assert d is None or d["nom"] == ""
 
 
-@pytest.mark.skipif(not GROQ_OK, reason="clé Groq absente")
+@groq_reel
 def test_detecter_nom_ambigu():
     """« le docteur Martin » n'est PAS le patient → confiance faible ou vide."""
     entries = [

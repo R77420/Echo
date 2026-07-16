@@ -60,7 +60,10 @@ def test_elements_vers_resume_format():
 
 # ------------------------------------------------------------ Groq réel
 
-@pytest.mark.skipif(not GROQ_OK, reason="clé Groq absente")
+from conftest import groq_reel
+
+
+@groq_reel
 def test_extraire_elements_json():
     d = resume.extraire_elements_cr(TRANSCRIPT, GROQ_API_KEY)
     assert set(d.keys()) == set(resume.CR_CATEGORIES)
@@ -70,7 +73,7 @@ def test_extraire_elements_json():
     assert d["suivi"], d
 
 
-@pytest.mark.skipif(not GROQ_OK, reason="clé Groq absente")
+@groq_reel
 def test_pas_de_terme_medical_invente():
     """« j'ai trop faim » ne doit PAS devenir « hyperphagie »."""
     d = resume.extraire_elements_cr(TRANSCRIPT, GROQ_API_KEY)
@@ -79,7 +82,7 @@ def test_pas_de_terme_medical_invente():
     assert "polyphagie" not in tout, d
 
 
-@pytest.mark.skipif(not GROQ_OK, reason="clé Groq absente")
+@groq_reel
 def test_categorie_vide():
     """Transcript sans traitement → traitements: []."""
     t = ("[10:00:01] Patient : Bonjour docteur, je viens pour mon certificat "

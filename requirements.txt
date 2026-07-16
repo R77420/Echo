@@ -42,6 +42,8 @@ pyinstaller-hooks-contrib==2026.5
 PyMuPDF==1.27.2.3
 python-docx==1.2.0
 pythonnet==3.1.0
+Pillow==12.3.0
+pystray==0.19.5
 pywebview==6.2.1
 pywin32-ctypes==0.2.3
 PyYAML==6.0.3
@@ -50,6 +52,7 @@ rich==15.0.0
 safetensors==0.7.0
 setuptools==81.0.0
 shellingham==1.5.4
+six==1.17.0
 SoundCard==0.4.6
 sympy==1.14.0
 tokenizers==0.22.2

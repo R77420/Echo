@@ -53,11 +53,10 @@ def test_fail_safe_transcript_vide():
 
 import pytest
 
-pytestmark_reel = pytest.mark.skipif(
-    not GROQ_DISPONIBLE, reason="GROQ_KEY.py absent — tests réels ignorés")
+from conftest import groq_reel
 
 
-@pytest.mark.skipif(not GROQ_DISPONIBLE, reason="clé Groq absente")
+@groq_reel
 def test_correction_medicament():
     """'Doliphrène' doit être corrigé en 'Doliprane' (appel Groq réel)."""
     t0 = time.time()
@@ -68,7 +67,7 @@ def test_correction_medicament():
     assert latence < 5.0
 
 
-@pytest.mark.skipif(not GROQ_DISPONIBLE, reason="clé Groq absente")
+@groq_reel
 def test_pas_de_correction_inutile():
     """Texte médicalement correct → retourné identique (ou quasi)."""
     texte = "Je vous prescris du Doliprane 1 g 3 fois par jour"
@@ -78,7 +77,7 @@ def test_pas_de_correction_inutile():
     assert "1 g" in res or "1g" in res
 
 
-@pytest.mark.skipif(not GROQ_DISPONIBLE, reason="clé Groq absente")
+@groq_reel
 def test_pas_de_reformulation():
     """Les hésitations du style oral doivent être conservées."""
     texte = "euh, je pense que... enfin, vous devriez prendre du Doliphrène"
@@ -88,7 +87,7 @@ def test_pas_de_reformulation():
     assert "Doliprane" in res
 
 
-@pytest.mark.skipif(not GROQ_DISPONIBLE, reason="clé Groq absente")
+@groq_reel
 def test_transcript_complet():
     """Correction globale : structure préservée, médicament corrigé."""
     entries = [
@@ -198,7 +197,7 @@ def test_attribuer_locuteurs_texte_falsifie_rejete(monkeypatch):
     assert correction.attribuer_locuteurs(entries) == entries
 
 
-@pytest.mark.skipif(not GROQ_DISPONIBLE, reason="clé Groq absente")
+@groq_reel
 def test_attribuer_locuteurs_basique():
     """Transcript simple avec prescription → la ligne « je vous prescris... »
     devient MÉDECIN (appel Groq réel)."""

@@ -54,6 +54,7 @@ import numpy as np
 from faster_whisper import WhisperModel
 
 import storage  # persistance : historique JSON + génération .docx (fonctions pures)
+import demarrage  # lancement au démarrage de Windows (clé de registre HKCU)
 # Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
 from audio import (
     SAMPLE_RATE, CHANNELS, FRAME_MS, FRAME_SAMPLES, VAD_LEVEL,
@@ -91,7 +92,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "1.9.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "2.0.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -790,6 +791,40 @@ def _charger_modele_local():
 # en zone 0.4-0.6 → seuil resserré à 0.5 après test terrain. Chaque segment
 # accepté/rejeté journalise son no_speech_prob pour affinage.
 NO_SPEECH_MAX = 0.5
+
+# ----------------------------- TEST MICROPHONE -------------------------------
+# Phrase de référence lue par le médecin à ~1 m du micro (distance patient).
+PHRASE_TEST_MICRO = ("Bonjour, je viens vous voir car j'ai mal à la gorge "
+                     "depuis trois jours.")
+# Mots-clés attendus pour juger la complétude de la transcription.
+_MOTS_TEST_MICRO = {"bonjour", "viens", "voir", "mal", "gorge",
+                    "depuis", "trois", "jours"}
+# Seuils RMS (cohérents avec la capture : mic télé strict / cabinet permissif).
+MIC_TEST_RMS_OK    = 0.015   # au-dessus : adapté au cabinet
+MIC_TEST_RMS_FAIBLE = 0.006  # entre les deux : capte mais faiblement
+
+
+def _qualite_transcription_test(texte):
+    """Ratio [0,1] de mots-clés attendus retrouvés dans la transcription."""
+    t = unicodedata.normalize("NFKD", (texte or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    mots = set(re.findall(r"[a-z]+", t))
+    if not mots:
+        return 0.0
+    return len(mots & _MOTS_TEST_MICRO) / len(_MOTS_TEST_MICRO)
+
+
+def verdict_micro(rms, texte):
+    """Trois verdicts à partir du RMS moyen et de la transcription obtenue :
+      'insuffisant' : RMS < 0.006 OU aucune transcription
+      'adapte'      : RMS > 0.015 ET transcription correcte
+      'faible'      : entre les deux (capte mais faiblement / partiel)."""
+    q = _qualite_transcription_test(texte)
+    if rms < MIC_TEST_RMS_FAIBLE or q == 0.0:
+        return "insuffisant"
+    if rms > MIC_TEST_RMS_OK and q >= 0.6:
+        return "adapte"
+    return "faible"
 
 
 def _transcrire_local(model, audio):
@@ -1787,6 +1822,8 @@ class Api:
         self._resume_text   = None
         self._webview_mod   = None  # module webview, disponible après start
         self._mode          = "tele"  # "tele" ou "cabinet" (présentiel)
+        self._tray          = None    # icône barre système (EchoTray)
+        self._fermeture_reelle = False  # True quand « Quitter Écho » est demandé
 
     # ---- Polling -------------------------------------------------------
 
@@ -1899,6 +1936,94 @@ class Api:
             "selected_mic":    presel_mic,
         }
 
+    def verifier_micro(self):
+        """Détection légère d'un micro disponible, AVANT de lancer la capture.
+        Permet au JS de guider l'utilisateur (modale) sans démarrer les threads.
+        Retourne {mic_present: bool, mics: [...]}."""
+        try:
+            mics = [str(m.name) for m in lister_micros()]
+        except Exception:
+            mics = []
+        return {"mic_present": bool(mics), "mics": mics}
+
+    # ===== TEST MICROPHONE (onboarding + Paramètres) =========================
+
+    def demarrer_test_micro(self, mic_name=""):
+        """Enregistre 5 s du micro, mesure le RMS, transcrit via Groq, en déduit
+        un verdict (adapte/faible/insuffisant). Non bloquant : le JS poll
+        get_test_micro_status() pour l'onde en direct puis le résultat."""
+        if getattr(self, "_mic_test_running", False):
+            return {"ok": True}
+        micro = resoudre_micro(mic_name) if mic_name else micro_defaut()
+        if micro is None:
+            return {"ok": False, "erreur": "no_mic"}
+        self._mic_test_running = True
+        self._mic_test = {"status": "running", "level": 0.0}
+        threading.Thread(target=self._worker_test_micro,
+                         args=(micro,), daemon=True).start()
+        return {"ok": True}
+
+    def _worker_test_micro(self, micro):
+        """Capture 5 s → RMS moyen → transcription Groq → verdict + config."""
+        frames = []
+        try:
+            with micro.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS,
+                                blocksize=FRAME_SAMPLES) as rec:
+                n = int(5.0 * SAMPLE_RATE / FRAME_SAMPLES)
+                for _ in range(n):
+                    data = rec.record(numframes=FRAME_SAMPLES)
+                    mono = data[:, 0] if data.ndim > 1 else data
+                    frames.append(mono.copy())
+                    # Niveau instantané (0..1) pour l'onde animée côté JS.
+                    self._mic_test["level"] = float(rms(mono))
+        except Exception:
+            _caplog.error("test_micro: %s", traceback.format_exc())
+            self._mic_test = {"status": "error"}
+            self._mic_test_running = False
+            return
+
+        audio_full = (np.concatenate(frames) if frames
+                      else np.zeros(1, dtype=np.float32))
+        rms_moyen = float(rms(audio_full))
+        texte, no_speech = "", None
+        client = _init_cloud_client()
+        if client is not None:
+            try:
+                texte, no_speech = _transcrire_cloud(client, audio_full)
+            except Exception:
+                texte = ""
+        texte = (texte or "").strip()
+        niveau = verdict_micro(rms_moyen, texte)
+
+        # Mémoriser pour ne pas redemander à chaque lancement.
+        try:
+            cfg = charger_config()
+            cfg["mic_test_rms"] = round(rms_moyen, 5)
+            cfg["mic_test_date"] = datetime.datetime.now().isoformat()
+            cfg["mic_test_verdict"] = niveau
+            sauver_config(cfg)
+        except Exception:
+            pass
+
+        self._mic_test = {
+            "status": "done", "level": 0.0,
+            "rms": round(rms_moyen, 5),
+            "texte": texte,
+            "no_speech": no_speech,
+            "verdict": niveau,
+        }
+        self._mic_test_running = False
+
+    def get_test_micro_status(self):
+        """État courant du test micro (poll JS : level pendant, résultat après)."""
+        return getattr(self, "_mic_test", {"status": "idle"})
+
+    def mic_test_fait(self):
+        """Le test micro a-t-il déjà été effectué ? (proposition au 1er cabinet)."""
+        cfg = charger_config()
+        return {"fait": bool(cfg.get("mic_test_date")),
+                "verdict": cfg.get("mic_test_verdict", "")}
+
     # ---- Démarrage -----------------------------------------------------
 
     def start(self, mic_name, output_name, mode="tele"):
@@ -1915,9 +2040,12 @@ class Api:
         if mode == "cabinet":
             micro = resoudre_micro(mic_name) if mic_name else micro_defaut()
             if micro is None:
-                return {"ok": False,
-                        "error": ("Aucun micro disponible. Branchez un micro, "
-                                  "puis relancez Écho.")}
+                # Micro indispensable en présentiel → erreur bloquante mais
+                # machine-lisible (le JS affiche une modale « Réessayer »).
+                return {"ok": False, "erreur": "no_mic",
+                        "error": ("Écho a besoin d'un microphone pour capter la "
+                                  "consultation. Branchez un micro ou un casque, "
+                                  "puis réessayez.")}
             cfg = charger_config()
             cfg["micro"] = mic_name or ""
             cfg["mode_consultation"] = "cabinet"
@@ -1967,6 +2095,8 @@ class Api:
         self._started = True
         result = {"ok": True, "loopback": loopback.name, "mode": "tele"}
         if micro is None:
+            # Mode dégradé assumé : patient seul. Flag machine-lisible + message.
+            result["mic_absent"] = True
             result["warning"] = (
                 "Aucun micro détecté — seule la voix du patient sera transcrite. "
                 "Branchez un micro puis relancez pour transcrire aussi le médecin.")
@@ -2241,6 +2371,38 @@ class Api:
         appliquer_titlebar_theme("dark" if theme == "dark" else "light")
         return {"ok": True}
 
+    # ===== DÉMARRAGE WINDOWS (barre système) =================================
+
+    def get_startup_state(self):
+        """État RÉEL de la clé de registre Run (pas une valeur config)."""
+        return {"enabled": demarrage.demarrage_actif()}
+
+    def set_startup(self, enabled):
+        """Active/désactive le lancement au démarrage de Windows.
+        Fail-safe : échec registre → {ok:false, error} sans planter."""
+        res = demarrage.activer_demarrage() if enabled else demarrage.desactiver_demarrage()
+        return res
+
+    def ouvrir_fenetre(self):
+        """Restaure et affiche la fenêtre principale (depuis le tray)."""
+        try:
+            if self._main_win:
+                self._main_win.show()
+                self._main_win.restore()
+        except Exception:
+            pass
+        return {"ok": True}
+
+    def quitter_app(self):
+        """Vraie sortie de l'application (menu « Quitter Écho » du tray)."""
+        self._fermeture_reelle = True
+        if getattr(self, "_tray", None):
+            self._tray.arreter()
+        self._close_all()
+        threading.Thread(
+            target=lambda: (time.sleep(0.3), os._exit(0)), daemon=True).start()
+        return {"ok": True}
+
     def backup_model_status(self):
         """État du modèle local de secours (présent + progression éventuelle)."""
         with _download_lock:
@@ -2340,6 +2502,7 @@ class Api:
 
         result = self.start(mic_name, output_name, self._mode)
         if result.get("ok"):
+            self._maj_tray("rouge")   # consultation en cours → icône rouge
             if self._main_win:
                 self._main_win.minimize()
             if self._overlay_win:
@@ -2370,6 +2533,7 @@ class Api:
     def end_consultation(self):
         """Ferme l'overlay et restaure la fenêtre principale."""
         self._save_done = True
+        self._maj_tray("vert")   # consultation terminée → icône verte (prêt)
         if self._overlay_win:
             self._overlay_win.hide()
         if self._main_win:
@@ -2408,6 +2572,54 @@ class Api:
                     w.destroy()
                 except Exception:
                     pass
+
+    # ===== BARRE SYSTÈME (tray) : état + minimisation =======================
+
+    def _maj_tray(self, etat=None):
+        """Met à jour la couleur de l'icône tray. Si etat=None, la déduit :
+        gris (licence invalide) → rouge (consultation active) → vert (prêt)."""
+        tray = getattr(self, "_tray", None)
+        if not tray:
+            return
+        if etat is None:
+            if not stop_event.is_set() and self._started:
+                etat = "rouge"
+            else:
+                try:
+                    cfg = charger_config()
+                    cle = cfg.get("cle_licence", "")
+                    ok = _verifier_licence(cle).get("valide", False) if cle else False
+                except Exception:
+                    ok = True   # fail-open : ne pas griser à tort hors ligne
+                etat = "vert" if ok else "gris"
+        tray.set_etat(etat)
+
+    def minimiser_dans_tray(self):
+        """Ferme (X) la fenêtre principale → minimisation dans la barre système
+        au lieu de quitter. Renvoie {minimise, notice} pour le handler pywebview.
+
+        Si une consultation est EN COURS, on NE minimise PAS silencieusement :
+        le JS affiche la confirmation habituelle (on ne cache pas une fenêtre
+        qui enregistre)."""
+        consultation_active = self._started and not stop_event.is_set()
+        if consultation_active:
+            return {"minimise": False, "consultation_active": True}
+        try:
+            if self._main_win:
+                self._main_win.hide()
+        except Exception:
+            pass
+        # Notification système « continue en arrière-plan », une seule fois.
+        cfg = charger_config()
+        premiere = not cfg.get("tray_notice_vue")
+        if premiere:
+            cfg["tray_notice_vue"] = True
+            sauver_config(cfg)
+            tray = getattr(self, "_tray", None)
+            if tray:
+                tray.notifier("Écho continue en arrière-plan — retrouvez-le "
+                              "près de l'horloge.")
+        return {"minimise": True, "notice": premiere}
 
     # ===== FLUX DE SAUVEGARDE (orchestré depuis le JS de l'overlay) ==========
 
@@ -3132,6 +3344,8 @@ def _main_webview():
     api._overlay_win = overlay_win
     api._window      = overlay_win   # compatibilité Phase 1
 
+    demarrage_tray = "--tray" in sys.argv   # lancé au démarrage Windows
+
     # Intercepter la fermeture de l'overlay via la croix Windows.
     def on_overlay_closing():
         with api._lock:
@@ -3143,18 +3357,70 @@ def _main_webview():
 
     overlay_win.events.closing += on_overlay_closing
 
+    # Fermeture (X) de la fenêtre principale : minimiser dans la barre système
+    # au lieu de quitter — sauf « Quitter Écho » (fermeture réelle) et sauf
+    # consultation en cours (confirmation demandée, pas de masquage silencieux).
+    def on_main_closing():
+        if api._fermeture_reelle:
+            return True   # laisser fermer
+        res = api.minimiser_dans_tray()
+        if res.get("consultation_active"):
+            # Une consultation enregistre → confirmation habituelle, ne pas cacher.
+            try:
+                overlay_win.show(); overlay_win.restore()
+                overlay_win.evaluate_js("handleWindowClose()")
+            except Exception:
+                pass
+        return False   # ne jamais fermer via la croix (tray only)
+
+    main_win.events.closing += on_main_closing
+
+    # --- Icône de la barre système (best-effort : app OK sans icône) ---
+    try:
+        from tray import EchoTray
+        api._tray = EchoTray(
+            on_open=lambda: api.ouvrir_fenetre(),
+            on_new=lambda: (api.ouvrir_fenetre(),
+                            _safe_js(main_win, "openConsultationFlow && openConsultationFlow()")),
+            on_quit=lambda: api.quitter_app(),
+        )
+        if not api._tray.demarrer():
+            api._tray = None
+    except Exception:
+        api._tray = None
+
     def on_start():
         api._webview_mod = webview
         overlay_win.hide()   # L'overlay est caché jusqu'au début d'une consultation.
+        # Lancé au démarrage Windows (--tray) : rester dans la barre système,
+        # sans ouvrir la fenêtre. La vérif de licence tourne quand même (JS).
+        if demarrage_tray:
+            try:
+                main_win.hide()
+            except Exception:
+                pass
         # Accorde la barre de titre au thème enregistré (best-effort, Windows 11).
         try:
             appliquer_titlebar_theme(charger_config().get("theme") or "light")
         except Exception:
             pass
+        # État initial de l'icône (vert / gris selon la licence).
+        threading.Thread(target=lambda: (time.sleep(1.0), api._maj_tray()),
+                         daemon=True).start()
 
     webview.start(func=on_start, debug=("--dev" in sys.argv))
     stop_event.set()
+    if api._tray:
+        api._tray.arreter()
     time.sleep(0.2)
+
+
+def _safe_js(win, code):
+    """Exécute du JS dans une fenêtre sans jamais lever (thread tray)."""
+    try:
+        win.evaluate_js(code)
+    except Exception:
+        pass
 
 
 def main():

@@ -4,7 +4,9 @@ from PyInstaller.utils.hooks import collect_all
 datas = [('C:\\Users\\rayou\\OneDrive\\Desktop\\Écho\\realtime-transcription\\ui', 'ui'),
          ('C:\\Users\\rayou\\OneDrive\\Desktop\\Écho\\realtime-transcription\\echo.ico', '.')]
 binaries = []
-hiddenimports = []
+# Barre système : pystray charge son backend Windows dynamiquement (win32).
+hiddenimports = ['pystray', 'pystray._win32', 'PIL', 'PIL.Image', 'PIL.ImageDraw',
+                 'demarrage', 'tray']
 tmp_ret = collect_all('faster_whisper')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('ctranslate2')
