@@ -2,7 +2,7 @@
 ; Transcription temps reel de consultation, 100% local.
 
 #define MyAppName "Écho"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.1.0"
 #define MyAppPublisher "MOUSSA Rayane"
 #define MyAppExeName "Echo.exe"
 ; Dossier source du build onedir (surchargé via ISCC /DSrcDir=...).
