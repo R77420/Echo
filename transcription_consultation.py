@@ -3095,7 +3095,20 @@ class Api:
     # ===== HISTORIQUE =========================================================
 
     def get_consultations(self):
-        return storage.charger_consultations(chemin_consultations())
+        data = storage.charger_consultations(chemin_consultations())
+        # Descripteur de ligne calculé à la source (motif validé > extrait >
+        # première réplique patient) : les vues n'ont qu'à l'afficher.
+        for c in data:
+            texte, typ = storage.descripteur_consultation(c)
+            c["descripteur"] = texte
+            c["descripteur_type"] = typ
+        return data
+
+    def get_synthese_patient(self, consultation_ids):
+        """Encart de synthèse de la fiche patient (dernière consultation +
+        traitements récents agrégés sur les consultations validées)."""
+        data = storage.charger_consultations(chemin_consultations())
+        return storage.synthese_patient(data, consultation_ids)
 
     def get_patients(self):
         """Patients distincts : consultations + patients créés manuellement."""

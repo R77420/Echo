@@ -280,6 +280,74 @@ def rechercher_patients(consultations, query):
     return resultats
 
 
+# ======================= DESCRIPTEUR & SYNTHÈSE =============================
+
+# Longueur max du fallback « première réplique patient » dans les listes.
+_DESC_MAX = 60
+
+
+def descripteur_consultation(c):
+    """Descripteur affiché sur chaque ligne de consultation (listes).
+    Priorité : motif validé > motif extrait (non confirmé) > premiers mots
+    de la première réplique du patient > rien.
+    Retourne (texte, type) avec type ∈ 'valide' | 'extrait' | 'replique'
+    | 'aucun' — la vue adapte le style (italique grisé pour le non-confirmé,
+    guillemets pour la réplique)."""
+    els = c.get("cr_elements") or {}
+    motifs = els.get("motif") or []
+    motif = (motifs[0] or "").strip() if motifs else ""
+    if motif:
+        return (motif, "valide" if c.get("cr_valide") is True else "extrait")
+    # Fallback : ce qu'a dit le patient en premier (« je viens vous voir
+    # parce que… ») — c'est à ça que le médecin reconnaît sa consultation.
+    # "Conversation" = cabinet non attribué : le patient y parle aussi.
+    for e in (c.get("entries") or []):
+        if len(e) < 3:
+            continue
+        loc, txt = e[1], (e[2] or "").strip()
+        if loc in ("Patient", "Conversation") and txt:
+            if len(txt) > _DESC_MAX:
+                coupe = txt[:_DESC_MAX].rsplit(" ", 1)[0]
+                txt = (coupe or txt[:_DESC_MAX]) + "…"
+            return (txt, "replique")
+    return ("", "aucun")
+
+
+def synthese_patient(consultations, ids):
+    """Encart de synthèse de la fiche patient : dernière consultation
+    (motif + traitements) et traitements récents agrégés sur les
+    consultations VALIDÉES — ce que le médecin veut voir en 30 secondes.
+    `ids` : consultation_ids du patient."""
+    ids = set(ids or [])
+    sel = [c for c in consultations if c.get("id") in ids]
+    sel.sort(key=lambda c: c.get("date") or "", reverse=True)
+
+    derniere = None
+    if sel:
+        c = sel[0]
+        els = (c.get("cr_elements") or {}) if c.get("cr_valide") is True else {}
+        derniere = {
+            "date":         c.get("date"),
+            "duration_min": c.get("duration_min"),
+            "motif":        descripteur_consultation(c)[0],
+            "motif_type":   descripteur_consultation(c)[1],
+            "traitements":  list(els.get("traitements") or []),
+        }
+
+    # Traitements récents : consultations validées, du plus récent au plus
+    # ancien, dédoublonnés en gardant la première occurrence.
+    vus, recents = set(), []
+    for c in sel:
+        if c.get("cr_valide") is not True:
+            continue
+        for t in ((c.get("cr_elements") or {}).get("traitements") or []):
+            cle = _normaliser(t)
+            if cle and cle not in vus:
+                vus.add(cle)
+                recents.append(t)
+    return {"derniere": derniere, "traitements_recents": recents}
+
+
 # ============================ DOCUMENT WORD =================================
 
 def _pt(points):

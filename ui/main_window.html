@@ -359,6 +359,8 @@
       <button class="btn btn-primary" id="pd-new-consult" style="flex-shrink:0;">＋ Nouvelle consultation avec ce patient</button>
     </div>
     <div class="section flex-1" style="overflow-y:auto;">
+      <!-- Synthèse : ce que le médecin veut voir en 30 s avant de recevoir -->
+      <div id="pd-synthese" class="pd-synthese hidden"></div>
       <div class="consult-timeline" id="pd-consult-list"></div>
     </div>
   </div>
@@ -457,7 +459,8 @@
        VUE : PARAMÈTRES
        ═══════════════════════════════════════════════ -->
   <div data-view="settings" class="hidden" style="flex:1;display:flex;flex-direction:column;">
-    <div class="page-header">
+    <div class="page-header" style="display:flex;align-items:center;gap:14px;">
+      <button class="btn btn-secondary btn-sm" id="settings-back" style="flex-shrink:0;">← Retour</button>
       <div class="page-title">Paramètres</div>
     </div>
     <div class="section flex-1" style="overflow-y:auto;">
@@ -805,6 +808,7 @@
 </div>
 
 <script src="app.js"></script>
+<script src="nav.js"></script>
 <script>
 'use strict';
 
@@ -843,7 +847,35 @@ function resetAuthForm() {
   if (typeof spClose === 'function') spClose();
 }
 
-function navigate(viewName) {
+/* ── Historique de navigation ──
+   navigate(page, ctx) empile la page COURANTE avant de changer ; goBack()
+   dépile et restaure la précédente avec son contexte (fiche du bon patient,
+   recherche intacte…). Pile vidée à l'accueil et à la déconnexion. */
+
+// Vues « flux » : leurs sorties sont gérées par le flux lui-même
+// (vcrSortie, finSerie…) — on n'empile rien en y entrant.
+const NAV_SANS_PILE = new Set(['validate-cr', 'name-cr']);
+
+// Restauration par défaut des pages « stables » (contexte porté par le DOM,
+// qui est conservé : la recherche de l'accueil reste affichée telle quelle).
+const NAV_RESTORE_DEFAUT = {
+  'home':     async () => navigate('home'),
+  'patients': async () => navigate('patients'),
+  'settings': async () => navigate('settings'),
+};
+
+// Libellé honnête du bouton retour selon la page où il ramène.
+const NAV_LABELS = {
+  'home':           "← Retour à l'accueil",
+  'patients':       '← Retour aux patients',
+  'patient-detail': '← Retour au patient',
+  'detail':         '← Retour à la consultation',
+};
+
+let _navCurrent   = null;    // entrée décrivant la page affichée
+let _navRestoring = false;   // goBack en cours : ne pas ré-empiler
+
+function navigate(viewName, ctx) {
   // Vider le formulaire auth quand on le quitte
   if (currentView === 'auth' && viewName !== 'auth') resetAuthForm();
 
@@ -855,7 +887,44 @@ function navigate(viewName) {
   });
   // Désactiver la nav sur les vues publiques (auth, expired)
   setNavAuth(!VUES_PUBLIQUES.has(viewName));
+
+  const entry = {
+    view: viewName,
+    key: (ctx && ctx.key) || '',
+    restore: (ctx && ctx.restore) || NAV_RESTORE_DEFAUT[viewName] || null,
+  };
+  if (viewName === 'home' || VUES_PUBLIQUES.has(viewName)) {
+    NavStack.clear();          // accueil = plancher ; déconnexion = pile vidée
+  } else if (!_navRestoring && !NAV_SANS_PILE.has(viewName) &&
+             _navCurrent && _navCurrent.restore &&
+             !(_navCurrent.view === entry.view && _navCurrent.key === entry.key)) {
+    NavStack.push(_navCurrent);
+  }
+  _navCurrent = entry;
   currentView = viewName;
+  updateBackLabels();
+}
+
+/* Dépile et restaure la page précédente ; pile vide → accueil. */
+async function goBack() {
+  const prev = NavStack.pop();
+  _navRestoring = true;
+  try {
+    if (prev && prev.restore) { await prev.restore(); }
+    else { await loadHome(); navigate('home'); }
+  } finally {
+    _navRestoring = false;
+  }
+}
+
+/* Le libellé des boutons « ← Retour » annonce leur vraie destination. */
+function updateBackLabels() {
+  const top = NavStack.peek();
+  const lbl = (top && NAV_LABELS[top.view]) || '← Retour';
+  ['detail-back', 'patient-back', 'batch-back', 'settings-back'].forEach(id => {
+    const el = $(id);
+    if (el) el.textContent = lbl;
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1350,6 +1419,35 @@ const _DELETE_SVG =
     '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>' +
     '<path d="M10 11v6M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg></button>';
 
+/* Descripteur d'une ligne de consultation (calculé côté Python :
+   motif validé > motif extrait > 1re réplique patient > « — »).
+   Le style annonce la fiabilité : extrait = grisé italique (non confirmé),
+   réplique = guillemets. */
+function descHtml(c) {
+  const t = (c.descripteur || '').trim();
+  if (!t) return '<span class="desc-vide">—</span>';
+  if (c.descripteur_type === 'extrait')
+    return '<span class="desc-extrait">' + esc(t) + '</span>';
+  if (c.descripteur_type === 'replique')
+    return '<span class="desc-replique">« ' + esc(t) + ' »</span>';
+  return esc(t);
+}
+
+/* Ligne 2 : statut (validé / à compléter) + indices utiles (ordonnance,
+   annexes) s'ils existent. */
+function metaHtml(c) {
+  const parts = [];
+  if (_estIncomplete(c)) parts.push('<span class="meta-warn">⚠ à compléter</span>');
+  else if (c.cr_valide === true) parts.push('<span class="meta-ok">✓ validé</span>');
+  const els = c.cr_elements || {};
+  if ((els.traitements || []).length) parts.push('ordonnance');
+  const nba = (c.annexes || []).length;
+  if (nba) parts.push(nba + ' annexe' + (nba > 1 ? 's' : ''));
+  return parts.length
+    ? '<div class="consult-meta">' + parts.join('<span class="meta-sep">·</span>') + '</div>'
+    : '';
+}
+
 /* Rend une liste de consultations en timeline groupée par jour. */
 function renderConsultations(items) {
   const list = $('consult-list');
@@ -1366,7 +1464,6 @@ function renderConsultations(items) {
       list.appendChild(h);
     }
     const nom   = ((p.nom||'') + ' ' + (p.prenom||'')).trim() || '—';
-    const motif = p.motif || '—';
     const aNommer     = (c.nom_a_saisir === true);
     const incomplete  = _estIncomplete(c);   // nom et/ou validation manquants
     const card  = document.createElement('div');
@@ -1378,7 +1475,7 @@ function renderConsultations(items) {
       '<div class="av av-' + avatarVariant(nom) + '">' + (aNommer ? '?' : esc(initiales(p))) + '</div>' +
       '<div class="consult-body"><div class="pname' + (aNommer ? ' pname-provisoire' : '') + '">' + esc(nom) +
         (incomplete ? '<span class="badge-acompleter">📋 À compléter</span>' : '') + '</div>' +
-        '<div class="reason">' + esc(motif) + '</div></div>' +
+        '<div class="reason">' + descHtml(c) + '</div>' + metaHtml(c) + '</div>' +
       '<span class="consult-go">' + (incomplete ? 'Compléter →' : 'Ouvrir →') + '</span>' + _DELETE_SVG;
     card.addEventListener('click', e => {
       if (e.target.closest('.consult-del')) return;
@@ -2211,7 +2308,7 @@ async function openBatchScreen() {
   const nomm = {};
   ((await api('get_consultations_a_nommer')) || []).forEach(d => { nomm[d.id] = d; });
   _batch = incompletes.map(c => ({ rec: c, nomm: nomm[c.id] || null }));
-  navigate('batch-cr');
+  navigate('batch-cr', { restore: () => openBatchScreen() });
   renderBatch();
 }
 
@@ -2367,9 +2464,7 @@ function collectBatch() {
   return items;
 }
 
-$('batch-back').addEventListener('click', async () => {
-  await loadHome(); navigate('home');
-});
+$('batch-back').addEventListener('click', goBack);
 
 $('batch-validate').addEventListener('click', () => {
   const items = collectBatch();
@@ -2670,6 +2765,9 @@ $('btn-save-settings').addEventListener('click', async () => {
   $('btn-save-settings').disabled = false;
 });
 
+/* Retour depuis Paramètres : la page d'où l'on venait (pile), pas l'accueil. */
+$('settings-back').addEventListener('click', goBack);
+
 /* ------------------------------------------------------------------ */
 /*  Détail consultation                                                */
 /* ------------------------------------------------------------------ */
@@ -2708,7 +2806,7 @@ async function showDetail(c) {
     hide($('detail-file-btns'));
   }
 
-  navigate('detail');
+  navigate('detail', { key: c.id, restore: () => showDetail(c) });
 }
 
 /* Rendu du bloc compte-rendu de la fiche : catégories colorées + puces.
@@ -2763,7 +2861,7 @@ $('detail-cr-edit').addEventListener('click', () => {
     { edition: true, origine: 'fiche' });
 });
 
-$('detail-back').addEventListener('click', () => navigate('home'));
+$('detail-back').addEventListener('click', goBack);
 
 $('detail-open-file').addEventListener('click', async () => {
   if (currentConsult && currentConsult.file_path)
@@ -2856,6 +2954,10 @@ async function showPatientDetail(p) {
     : p.nb_consultations + ' consultation' + (p.nb_consultations > 1 ? 's' : ''));
   $('pd-sub').textContent = sous.join(' · ');
 
+  // Encart de synthèse : dernière consultation + traitements récents
+  // (agrégés côté Python sur les consultations validées).
+  renderSynthesePatient(await api('get_synthese_patient', p.consultation_ids || []));
+
   // Toutes ses consultations, chronologie récente en premier (même format
   // timeline que l'accueil : heure, durée, motif).
   const ids = new Set(p.consultation_ids || []);
@@ -2875,21 +2977,60 @@ async function showPatientDetail(p) {
       h.innerHTML = '<span>' + esc(dl) + '</span><span class="tl-rule"></span>';
       list.appendChild(h);
     }
-    const motif = (c.patient || {}).motif || '—';
     const card = document.createElement('div');
     card.className = 'consult';
     card.innerHTML =
       '<div class="time-rail"><span class="hm">' + esc(timeHM(c.date)) + '</span>' +
         '<span class="dur">' + (c.duration_min ? esc(c.duration_min + ' min') : '') + '</span></div>' +
-      '<div class="consult-body"><div class="reason" style="margin-top:2px;">' + esc(motif) + '</div></div>' +
+      '<div class="consult-body"><div class="reason" style="margin-top:2px;">' + descHtml(c) + '</div>' +
+        metaHtml(c) + '</div>' +
       '<span class="consult-go">Ouvrir →</span>';
     card.addEventListener('click', () => showDetail(c));
     list.appendChild(card);
   });
-  navigate('patient-detail');
+  navigate('patient-detail', {
+    key: patientLabel(p),
+    restore: () => showPatientDetail(p),
+  });
 }
 
-$('patient-back').addEventListener('click', () => navigate('patients'));
+/* Encart de synthèse de la fiche patient. Masqué si rien à montrer
+   (aucune consultation). Le motif non confirmé reste signalé comme tel. */
+function renderSynthesePatient(s) {
+  const box = $('pd-synthese');
+  if (!s || !s.derniere) { hide(box); box.innerHTML = ''; return; }
+  const d = s.derniere;
+  const dte = new Date(d.date);
+  const quand = dte.getDate() + ' ' + _MOIS[dte.getMonth()] +
+    (d.duration_min ? ', ' + d.duration_min + ' min' : '');
+  let motif = esc(d.motif || '—');
+  if (d.motif && d.motif_type === 'extrait')
+    motif = '<span class="desc-extrait">' + esc(d.motif) + '</span>';
+  else if (d.motif && d.motif_type === 'replique')
+    motif = '<span class="desc-replique">« ' + esc(d.motif) + ' »</span>';
+  let html =
+    '<div class="pd-synth-bloc">' +
+      '<div class="pd-synth-titre">Dernière consultation — ' + esc(quand) + '</div>' +
+      '<div class="pd-synth-ligne"><span class="pd-synth-lbl">Motif :</span> ' + motif + '</div>' +
+      (d.traitements.length
+        ? '<div class="pd-synth-ligne"><span class="pd-synth-lbl">Traitements :</span> ' +
+          esc(d.traitements.join(', ')) + '</div>'
+        : '') +
+    '</div>';
+  if (s.traitements_recents.length) {
+    html +=
+      '<div class="pd-synth-bloc">' +
+        '<div class="pd-synth-titre">Traitements récents</div>' +
+        '<div class="pd-synth-ligne">' +
+          s.traitements_recents.map(esc).join('<span class="meta-sep">·</span>') +
+        '</div>' +
+      '</div>';
+  }
+  box.innerHTML = html;
+  show(box);
+}
+
+$('patient-back').addEventListener('click', goBack);
 
 /* ---- Modale "Nouveau patient" ---- */
 
@@ -2985,6 +3126,7 @@ $('pp-btn-deconnecter').addEventListener('click', async () => {
   closeProfilePanel();
   await api('deconnecter');
   licenceValide = false;
+  NavStack.clear();   // déconnexion : aucun historique ne survit à la session
   // Réinitialiser l'identité sidebar avant de revenir à l'écran auth
   $('doctor-name').textContent    = 'Chargement…';
   $('doctor-initials').textContent = '··';

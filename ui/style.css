@@ -1861,3 +1861,30 @@ input[type="range"] {
 .mictest-inline.verdict-ok   { border-color: #2E7D6B; }
 .mictest-inline.verdict-warn { border-color: #C9962B; }
 .mictest-inline.verdict-bad  { border-color: var(--danger); }
+
+/* ── Descripteur de ligne + méta (accueil, recherche, fiche patient) ── */
+.desc-extrait  { color: var(--txt-secondary); font-style: italic; }  /* motif non confirmé */
+.desc-replique { color: var(--txt-secondary); font-style: italic; }  /* dit par le patient */
+.desc-vide     { color: var(--txt-secondary); }
+.consult-meta {
+  margin-top: 3px; font-size: 11.5px; color: var(--txt-secondary);
+  display: flex; align-items: center; gap: 6px;
+}
+.consult-meta .meta-ok   { color: var(--accent); }
+.consult-meta .meta-warn { color: #C9962B; }
+.meta-sep { margin: 0 6px; color: var(--border); }
+
+/* ── Encart de synthèse de la fiche patient ── */
+.pd-synthese {
+  margin-bottom: 20px; padding: 16px 18px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: var(--shadow-card);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.pd-synth-titre {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--txt-secondary);
+  margin-bottom: 6px;
+}
+.pd-synth-ligne { font-size: 13.5px; line-height: 1.55; color: var(--txt-primary); }
+.pd-synth-lbl   { color: var(--txt-secondary); }
