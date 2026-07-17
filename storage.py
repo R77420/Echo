@@ -234,6 +234,10 @@ def extraire_patients(consultations, patients_manuels=None):
     for c in consultations:
         if not isinstance(c, dict):
             continue
+        # La consultation de démonstration ne crée jamais de patient :
+        # « DUBOIS » n'est pas un vrai dossier.
+        if c.get("demo") is True:
+            continue
         p = c.get("patient") or {}
         nom = (p.get("nom") or "").strip()
         if not nom:

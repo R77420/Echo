@@ -1,5 +1,8 @@
 """
-Transcription temps reel d'une consultation Doctolib (Windows, 100 % local).
+Transcription temps reel d'une consultation medicale (Windows).
+L'audio est transcrit via une infrastructure securisee (Groq), n'est pas
+conserve apres transcription et ne sert jamais a entrainer de modeles.
+Les comptes-rendus et donnees patient sont stockes en local sur le poste.
 
 Capte simultanement :
   - le microphone du medecin
@@ -92,7 +95,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "2.1.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "2.2.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -138,6 +141,12 @@ def _get_gain(label):
 # ---- État VAD temps réel (qui parle maintenant) ----
 # Lecture/écriture de booléens simples : atomique sous GIL, pas de lock requis.
 _speaking_now = {"medecin": False, "patient": False, "conversation": False}
+
+# Pendant la consultation de DÉMONSTRATION : collecte des RMS des segments
+# micro pour rendre un verdict micro en fin de démo (remplace le test 5 s —
+# on ne fait pas relire une phrase au médecin). Activé par Api.set_demo_mode.
+_demo_capture = {"actif": False, "rms": []}
+
 
 def _set_speaking(label, is_speech):
     if label == "Patient":
@@ -498,6 +507,10 @@ def capturer(source_factory, label):
                 _set_speaking(label, is_speech)
                 if segment is not None:
                     seg_rms = rms(segment)
+                    # Démo : mémoriser le niveau des segments micro (pas le
+                    # loopback) pour le verdict micro de fin de découverte.
+                    if _demo_capture["actif"] and label != "Patient":
+                        _demo_capture["rms"].append(float(seg_rms))
                     audible = garder_si_audible(segment, seuil=rms_seuil)
                     _caplog.debug(
                         "[%s] segment dur=%.2fs rms=%.4f keep=%s",
@@ -1946,6 +1959,87 @@ class Api:
             mics = []
         return {"mic_present": bool(mics), "mics": mics}
 
+    # ===== PRISE EN MAIN (visite guidée + consultation de démonstration) =====
+
+    def get_decouverte(self):
+        """Flags de la prise en main + verdict micro rendu par la démo."""
+        cfg = charger_config()
+        return {"visite_faite": bool(cfg.get("visite_faite")),
+                "demo_faite":   bool(cfg.get("demo_faite")),
+                "demo_micro":   getattr(self, "_demo_micro", None)}
+
+    def marquer_decouverte(self, flag):
+        """Mémorise 'visite_faite' ou 'demo_faite' (proposer une fois,
+        puis laisser tranquille — jamais de relance forcée)."""
+        if flag not in ("visite_faite", "demo_faite"):
+            return {"ok": False}
+        cfg = charger_config()
+        cfg[flag] = True
+        sauver_config(cfg)
+        return {"ok": True}
+
+    def set_demo_mode(self, actif):
+        """(Dés)active le mode démonstration pour la PROCHAINE consultation.
+        Actif : la sauvegarde marquera demo=true et les RMS micro sont
+        collectés pour le verdict micro de fin de découverte."""
+        _demo_capture["actif"] = bool(actif)
+        _demo_capture["rms"] = []
+        if actif:
+            self._demo_micro = None
+        return {"ok": True}
+
+    def get_demo_actif(self):
+        """Lu par l'overlay pour afficher le script et les bulles guidées."""
+        return {"actif": bool(_demo_capture["actif"])}
+
+    def _finir_demo(self, entries):
+        """Fin de la consultation de démo : verdict micro (si jamais testé —
+        on ne fait pas relire une phrase, la démo remplace le test 5 s)."""
+        try:
+            cfg = charger_config()
+            if not cfg.get("mic_test_date") and _demo_capture["rms"]:
+                rms_moyen = sum(_demo_capture["rms"]) / len(_demo_capture["rms"])
+                texte = " ".join(t for _, loc, t in entries if loc != "Patient")
+                # Pas de phrase de référence en démo : la « qualité » est
+                # simplement « du texte a été transcrit depuis le micro ».
+                if rms_moyen < MIC_TEST_RMS_FAIBLE or not texte.strip():
+                    verdict = "insuffisant"
+                elif rms_moyen > MIC_TEST_RMS_OK:
+                    verdict = "adapte"
+                else:
+                    verdict = "faible"
+                cfg["mic_test_rms"] = round(float(rms_moyen), 5)
+                cfg["mic_test_date"] = datetime.datetime.now().isoformat()
+                cfg["mic_test_verdict"] = verdict
+                self._demo_micro = verdict
+            cfg["demo_faite"] = True
+            sauver_config(cfg)
+        except Exception:
+            pass
+
+    def suggerer_nom_patient(self):
+        """Suggestion du nom entendu dans la conversation courante (démo,
+        étape 3) : SUGGESTION affichée avec badge ✨, jamais un remplissage
+        silencieux — le médecin garde le dernier mot."""
+        with self._lock:
+            entries = list(self._entries)
+        try:
+            return correction.detecter_nom_patient(entries)
+        except Exception:
+            return None
+
+    def supprimer_demo(self):
+        """Supprime la consultation de démonstration (entrée + fichier).
+        Le « patient » DUBOIS disparaît avec elle (jamais compté ailleurs)."""
+        data = storage.charger_consultations(chemin_consultations())
+        demo = next((c for c in data if isinstance(c, dict)
+                     and c.get("demo") is True), None)
+        if demo is None:
+            return {"ok": False, "error": "Aucune démonstration trouvée."}
+        storage.supprimer_consultation_avec_fichier(
+            chemin_consultations(), demo.get("id"))
+        return {"ok": True}
+
     # ===== TEST MICROPHONE (onboarding + Paramètres) =========================
 
     def demarrer_test_micro(self, mic_name=""):
@@ -2207,11 +2301,14 @@ class Api:
         }
 
     def complete_onboarding(self, doctor_name, mic_name, output_name):
-        """Valide l'onboarding et sauvegarde la config complète."""
-        if not doctor_name.strip():
-            return {"ok": False, "error": "Le nom du médecin est obligatoire."}
+        """Valide l'onboarding et sauvegarde la config complète.
+        Le nom n'est plus demandé pendant l'onboarding : celui de
+        l'INSCRIPTION fait foi (doctor_name vide = le conserver)."""
         cfg = charger_config()
-        cfg["doctor_name"] = doctor_name.strip()
+        if doctor_name.strip():
+            cfg["doctor_name"] = doctor_name.strip()
+        if not cfg.get("doctor_name"):
+            return {"ok": False, "error": "Le nom du médecin est introuvable."}
         cfg["micro"]  = mic_name
         cfg["sortie"] = output_name
         sauver_config(cfg)
@@ -2739,7 +2836,10 @@ class Api:
             "cr_elements":  None,           # extraction IA (remplie en arrière-plan)
             "entries":      [list(e) for e in entries],
             "annexes":      annexes or [],  # pour réécrire le .docx en différé
+            "demo":         bool(_demo_capture["actif"]),   # consultation de démonstration
         })
+        if _demo_capture["actif"]:
+            self._finir_demo(entries)
 
         # Mémorise pour un éventuel ajout de résumé ultérieur (flux non bloquant).
         self._saved_id        = cid
@@ -3162,6 +3262,9 @@ class Api:
         durees = []
         for c in consultations:
             if not isinstance(c, dict):
+                continue
+            # La démonstration ne compte pas dans l'activité du médecin.
+            if c.get("demo") is True:
                 continue
             try:
                 d = datetime.datetime.fromisoformat(c.get("date", ""))

@@ -139,15 +139,10 @@
   <div data-view="onboarding-welcome" class="hidden" style="flex:1;display:flex;flex-direction:column;">
     <div class="onboarding-wrap">
       <div class="onboarding-logo">Écho</div>
-      <div class="onboarding-title">Bienvenue dans Écho</div>
-      <div class="onboarding-sub">Votre assistant de transcription médicale — 100&nbsp;% local, 100&nbsp;% confidentiel.</div>
+      <div class="onboarding-title" id="ob-welcome-title">Bienvenue</div>
+      <div class="onboarding-sub">Votre assistant de consultation médicale.<br>
+        Audio jamais conservé&nbsp;· Comptes-rendus stockés sur votre poste</div>
       <div class="onboarding-form">
-        <div class="field">
-          <label class="field-label" for="ob-name">Quel est votre nom, Docteur ?</label>
-          <input type="text" id="ob-name" placeholder="Dr Dupont" autocomplete="off">
-          <div class="field-err hidden" id="ob-name-err">Ce champ est obligatoire.</div>
-        </div>
-        <div id="ob-banner" class="hidden"></div>
         <button class="btn btn-primary" id="ob-next" style="width:100%;padding:12px;">
           Continuer →
         </button>
@@ -378,6 +373,13 @@
         <div id="vcr-loading" class="hidden" style="display:flex;align-items:center;gap:10px;color:var(--txt-secondary);font-size:14px;">
           <span class="vcr-spinner"></span> Analyse de la consultation en cours…
         </div>
+        <!-- Démonstration, étape 4 : LA validation — le cœur du produit -->
+        <div id="demo-bulle-validation" class="demo-bulle hidden">
+          <strong>C'est ici que tout se joue.</strong> Écho propose, VOUS décidez.
+          Décochez ce qui est faux, corrigez un libellé, ajoutez ce qui manque.
+          Seuls les éléments cochés sont enregistrés.<br>
+          <span style="opacity:.8;">Essayez de décocher un élément pour voir.</span>
+        </div>
         <div id="vcr-sections"></div>
         <div id="vcr-banner" class="banner banner-err hidden"></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;padding-bottom:24px;">
@@ -573,10 +575,14 @@
   <div data-view="detail" class="hidden" style="flex:1;display:flex;flex-direction:column;">
     <div class="page-header" style="display:flex;align-items:center;gap:14px;">
       <button class="btn btn-secondary btn-sm" id="detail-back" style="flex-shrink:0;">← Retour</button>
-      <div>
+      <div style="flex:1;">
         <div class="page-title" id="detail-title">Consultation</div>
         <div class="page-subtitle" id="detail-date"></div>
       </div>
+      <button class="btn btn-secondary btn-sm hidden" id="detail-del-demo"
+              style="flex-shrink:0;color:var(--danger);border-color:var(--danger);">
+        Supprimer la démonstration
+      </button>
     </div>
 
     <div class="section flex-1" style="overflow-y:auto;">
@@ -629,15 +635,16 @@
 <!-- Modale de confirmation de suppression -->
 <div id="delete-modal" class="confirm-overlay hidden">
   <div class="confirm-box">
-    <div class="confirm-title">Supprimer ce compte-rendu ?</div>
+    <div class="confirm-title" id="delete-modal-title">Supprimer ce compte-rendu ?</div>
     <div class="confirm-sub" id="delete-modal-sub"></div>
     <div class="confirm-actions">
       <button class="btn btn-secondary" id="delete-history-only">Supprimer de l'historique uniquement</button>
       <button class="btn btn-danger" id="delete-permanent">Supprimer définitivement</button>
+      <button class="btn btn-danger hidden" id="delete-demo">Supprimer</button>
       <button class="btn btn-secondary" id="delete-cancel">Annuler</button>
     </div>
     <div id="delete-modal-banner" class="banner banner-err confirm-banner hidden"></div>
-    <div class="confirm-note">La suppression définitive est irréversible.</div>
+    <div class="confirm-note" id="delete-modal-note">La suppression définitive est irréversible.</div>
   </div>
 </div>
 
@@ -711,6 +718,11 @@
   <div class="confirm-box" style="max-width:560px;">
     <div class="confirm-title">Type de consultation</div>
     <div class="confirm-sub">Comment se déroule cette consultation ?</div>
+    <!-- Démonstration, étape 1 : découvrir que les deux modes existent -->
+    <div id="demo-bulle-mode" class="demo-bulle hidden">
+      Écho fonctionne au cabinet ET en téléconsultation.
+      Pour la démonstration, choisissez «&nbsp;Au cabinet&nbsp;».
+    </div>
     <div class="mode-cards">
       <button class="mode-card" data-mode="cabinet">
         <span class="mode-emoji">🏥</span>
@@ -788,6 +800,68 @@
       <button class="btn btn-secondary" id="mictest-prompt-skip" style="padding:10px;">Continuer sans tester</button>
     </div>
   </div>
+</div>
+
+<!-- ── Prise en main : proposition de visite guidée ─────────── -->
+<div id="tour-proposal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:440px;text-align:center;">
+    <div class="confirm-title">Découvrir Écho en 2 minutes</div>
+    <div class="confirm-sub" style="margin-top:8px;">
+      Une visite rapide de l'essentiel — vous saurez exactement
+      quoi faire avant votre premier patient.
+    </div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="tour-start" style="padding:12px;">Commencer la visite</button>
+      <button class="btn btn-secondary" id="tour-skip" style="padding:10px;border:none;">Passer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Prise en main : bulle de la visite guidée (coach mark) ── -->
+<div id="tour-bubble" class="tour-bubble hidden">
+  <div class="tour-bubble-text" id="tour-text"></div>
+  <div class="tour-bubble-foot">
+    <span class="tour-progress" id="tour-progress">1/5</span>
+    <span class="flex-1"></span>
+    <button class="tour-pass" id="tour-pass">Passer la visite</button>
+    <button class="btn btn-primary btn-sm" id="tour-next">Suivant</button>
+  </div>
+</div>
+
+<!-- ── Prise en main : proposition de démonstration ─────────── -->
+<div id="demo-proposal" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:460px;text-align:center;">
+    <div class="confirm-title">Essayons ensemble</div>
+    <div class="confirm-sub" style="margin-top:8px;">
+      Lancez une consultation de démonstration&nbsp;: vous parlez, Écho
+      transcrit, et vous voyez le résultat immédiatement.
+      Aucune donnée patient n'est enregistrée.
+    </div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="demo-start" style="padding:12px;">Lancer la démonstration</button>
+      <button class="btn btn-secondary" id="demo-later" style="padding:10px;border:none;">Plus tard</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Prise en main : fin de la démonstration (étape 5) ─────── -->
+<div id="demo-final" class="confirm-overlay hidden">
+  <div class="confirm-box" style="max-width:460px;text-align:center;">
+    <div class="confirm-title">Votre compte-rendu est prêt</div>
+    <div class="confirm-sub" style="margin-top:8px;">
+      En consultation réelle, cela vous prend une dizaine de secondes.
+    </div>
+    <div id="demo-final-micro" class="mictest-inline hidden" style="text-align:left;margin-top:14px;"></div>
+    <div class="confirm-actions" style="flex-direction:column;gap:8px;margin-top:18px;">
+      <button class="btn btn-primary" id="demo-final-ok" style="padding:12px;">Terminer la découverte</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Menu Aide & contact ──────────────────────────────────── -->
+<div id="help-menu" class="help-menu hidden">
+  <button class="help-menu-item" id="help-tour">Revoir la prise en main</button>
+  <button class="help-menu-item" id="help-demo">Refaire une consultation de démonstration</button>
 </div>
 
 <!-- ── Panneau profil flottant ──────────────────────────────── -->
@@ -958,7 +1032,7 @@ onReady(async () => {
 
   // 3. Onboarding pas encore fait
   if (!state.onboarding_done) {
-    navigate('onboarding-welcome');
+    await ouvrirBienvenue();
     return;
   }
 
@@ -1076,7 +1150,7 @@ $('btn-signup').addEventListener('click', async () => {
   licenceValide = true;
   // Re-lire l'état pour avoir jours_restants à jour depuis config.json
   const state = await api('get_app_state');
-  navigate('onboarding-welcome');
+  await ouvrirBienvenue();          // nom affiché (jamais redemandé), sidebar à jour
   if (state && state.en_essai) showTrialBanner(state.jours_restants);
 });
 
@@ -1099,7 +1173,9 @@ $('btn-login').addEventListener('click', async () => {
   if (res.expired) { licenceValide = false; navigate('expired'); return; }
   licenceValide = true;
   const state = await api('get_app_state');
-  if (state && !state.onboarding_done) { navigate('onboarding-welcome'); return; }
+  // Compte existant pas encore configuré : accueil personnalisé,
+  // sans redemander le nom (il vient du compte).
+  if (state && !state.onboarding_done) { await ouvrirBienvenue(); return; }
   if (state) setDoctorIdentity(state.doctor_name || '', state.specialty || '');
   await loadHome();
   navigate('home');
@@ -1159,10 +1235,17 @@ function fmtBytes(b) {
 /*  Onboarding                                                         */
 /* ------------------------------------------------------------------ */
 
+/* Le nom vient de l'INSCRIPTION — jamais redemandé ici. L'écran de
+   bienvenue est un simple accueil personnalisé, puis choix du thème. */
+async function ouvrirBienvenue() {
+  const state = await api('get_app_state');
+  const nom = (state && state.doctor_name) || '';
+  $('ob-welcome-title').textContent = nom ? 'Bienvenue, ' + nom : 'Bienvenue dans Écho';
+  if (state) setDoctorIdentity(nom, state.specialty || '');   // sidebar à jour
+  navigate('onboarding-welcome');
+}
+
 $('ob-next').addEventListener('click', () => {
-  const name = $('ob-name').value.trim();
-  if (!name) { show($('ob-name-err')); $('ob-name').focus(); return; }
-  hide($('ob-name-err'));
   navigate('onboarding-theme');     // étape choix du thème avant les périphériques
 });
 
@@ -1196,7 +1279,6 @@ $('theme-continue').addEventListener('click', async () => {
   populateDeviceSetupPage();
   navigate('onboarding-setup');
 });
-$('ob-name').addEventListener('keydown', e => { if (e.key==='Enter') $('ob-next').click(); });
 
 async function populateDeviceSetupPage() {
   const devs = await api('get_devices');
@@ -1206,12 +1288,15 @@ async function populateDeviceSetupPage() {
 }
 
 $('obs-done').addEventListener('click', async () => {
-  const name = $('ob-name').value.trim();
-  const res  = await api('complete_onboarding', name, $('obs-mic').value, $('obs-output').value);
+  // Nom vide : Python conserve celui enregistré à l'inscription.
+  const res  = await api('complete_onboarding', '', $('obs-mic').value, $('obs-output').value);
   if (res && res.ok) {
-    $('doctor-name').textContent = name;
     await loadHome();
     navigate('home');
+    // Prise en main : proposer la visite guidée (une seule fois — le flag
+    // est posé dès la proposition, jamais de relance forcée ensuite).
+    const dec = await api('get_decouverte');
+    if (!dec || !dec.visite_faite) proposerVisite();
   } else {
     const banner = $('obs-banner');
     banner.className = 'banner banner-err';
@@ -1474,6 +1559,7 @@ function renderConsultations(items) {
         '<span class="dur">' + (c.duration_min ? esc(c.duration_min + ' min') : '') + '</span></div>' +
       '<div class="av av-' + avatarVariant(nom) + '">' + (aNommer ? '?' : esc(initiales(p))) + '</div>' +
       '<div class="consult-body"><div class="pname' + (aNommer ? ' pname-provisoire' : '') + '">' + esc(nom) +
+        (c.demo === true ? '<span class="badge-demo">Démonstration</span>' : '') +
         (incomplete ? '<span class="badge-acompleter">📋 À compléter</span>' : '') + '</div>' +
         '<div class="reason">' + descHtml(c) + '</div>' + metaHtml(c) + '</div>' +
       '<span class="consult-go">' + (incomplete ? 'Compléter →' : 'Ouvrir →') + '</span>' + _DELETE_SVG;
@@ -1571,7 +1657,19 @@ function openDeleteModal(c) {
     const pad = n => String(n).padStart(2, '0');
     datePart = ' — ' + pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear();
   } catch {}
-  $('delete-modal-sub').textContent = nom + datePart;
+  // Démo : un seul choix — « historique / définitivement » n'a aucun sens
+  // (pas de dossier patient à préserver). Vraie consultation : deux options.
+  const estDemo = (c.demo === true);
+  $('delete-modal-title').textContent = estDemo
+    ? 'Supprimer la démonstration ?' : 'Supprimer ce compte-rendu ?';
+  $('delete-modal-sub').textContent = estDemo
+    ? 'Cette consultation de démonstration et son patient fictif seront retirés.'
+    : nom + datePart;
+  $('delete-modal-note').textContent = estDemo
+    ? '' : 'La suppression définitive est irréversible.';
+  (estDemo ? hide : show)($('delete-history-only'));
+  (estDemo ? hide : show)($('delete-permanent'));
+  (estDemo ? show : hide)($('delete-demo'));
   clearBanner($('delete-modal-banner'));
   show($('delete-modal'));
 }
@@ -1583,13 +1681,16 @@ function closeDeleteModal() {
 
 function removeCardFromList(id) {
   const list = $('consult-list');
-  const card = list.querySelector('.consultation-card[data-id="' + id + '"]');
-  if (!card) return;
+  // Les cartes de la timeline portent la classe .consult (PAS
+  // .consultation-card — sélecteur obsolète qui rendait la suppression
+  // invisible : l'entrée restait affichée après un clic « réussi »).
+  const card = list.querySelector('.consult[data-id="' + id + '"]');
+  allConsultations = allConsultations.filter(c => c.id !== id);
+  if (!card) { renderFiltered(); return; }
   card.classList.add('is-removing');
   setTimeout(() => {
     card.remove();
-    allConsultations = allConsultations.filter(c => c.id !== id);
-    if (!list.querySelector('.consultation-card')) {
+    if (!list.querySelector('.consult')) {
       list.innerHTML = '<div class="empty-state">' +
         '<div class="empty-state-icon">∅</div>' +
         '<div>Aucune consultation enregistrée pour le moment.</div></div>';
@@ -1616,6 +1717,23 @@ async function doDelete(method) {
 
 $('delete-history-only').addEventListener('click', () => doDelete('delete_consultation'));
 $('delete-permanent').addEventListener('click', () => doDelete('delete_consultation_with_file'));
+/* Démo : entrée + fichier .docx + patient fictif, en un geste. */
+$('delete-demo').addEventListener('click', async () => {
+  if (!consultToDelete) return;
+  const id = consultToDelete.id;
+  $('delete-demo').disabled = true;
+  const res = await api('supprimer_demo');
+  $('delete-demo').disabled = false;
+  if (res && res.ok) {
+    closeDeleteModal();
+    removeCardFromList(id);
+    if (currentView === 'detail') { await loadHome(); navigate('home'); }
+  } else {
+    const b = $('delete-modal-banner');
+    b.textContent = (res && res.error) || 'Suppression impossible. Veuillez réessayer.';
+    show(b);
+  }
+});
 $('delete-cancel').addEventListener('click', closeDeleteModal);
 $('delete-modal').addEventListener('click', e => {
   if (e.target === $('delete-modal')) closeDeleteModal();
@@ -1644,6 +1762,8 @@ $('btn-new-consult').addEventListener('click', openConsultationFlow);
 
 function openModeModal(dernierMode) {
   clearBanner($('mode-banner'));
+  // La bulle de démo ne s'affiche que pendant la découverte.
+  if (!_demoEnCours) hide($('demo-bulle-mode'));
   // Présélection visuelle du dernier mode utilisé.
   document.querySelectorAll('.mode-card').forEach(c =>
     c.classList.toggle('preselected', c.dataset.mode === dernierMode));
@@ -1667,7 +1787,9 @@ async function lancerConsultation(mode) {
     return;
   }
   // Cabinet : si le micro n'a jamais été testé, proposer un test d'abord.
-  if (mode === 'cabinet') {
+  // (Sauf en démonstration : la démo REMPLACE le test — on ne fait pas
+  // lire deux phrases au médecin, le verdict micro sortira à l'étape 5.)
+  if (mode === 'cabinet' && !_demoEnCours) {
     const t = await api('mic_test_fait');
     if (t && t.fait === false) {
       $('mictest-prompt').dataset.mode = mode;
@@ -1742,6 +1864,172 @@ $('nomic-continue').addEventListener('click', async () => {
   await demarrerConsultation($('nomic-modal').dataset.mode);
 });
 $('nomic-back').addEventListener('click', () => hide($('nomic-modal')));
+
+/* ------------------------------------------------------------------ */
+/*  Prise en main guidée : visite (coach marks) + démonstration        */
+/* ------------------------------------------------------------------ */
+
+let _demoEnCours = false;   // consultation de démonstration en cours
+
+/* ── Visite guidée : 5 bulles, spotlight, clavier ── */
+const TOUR_STEPS = [
+  { sel: '#btn-new-consult',
+    texte: "Tout commence ici. Un clic avant chaque patient." },
+  { sel: '.nav-item[data-nav="patients"]',
+    texte: "Toutes vos consultations, regroupées par patient." },
+  { sel: '#stats-grid',
+    texte: "Votre activité du mois, en un coup d'œil." },
+  { sel: '#sidebar-doc-btn',
+    texte: "Votre compte, votre abonnement, vos paramètres." },
+  { sel: '#consult-list',
+    texte: "Vos consultations récentes apparaîtront ici." },
+];
+let _tourIdx = -1;
+let _tourEl  = null;
+
+function proposerVisite() {
+  // Flag posé DÈS la proposition : proposer une fois, puis laisser
+  // tranquille (même si le médecin ferme l'app sans répondre).
+  api('marquer_decouverte', 'visite_faite');
+  show($('tour-proposal'));
+}
+$('tour-start').addEventListener('click', () => { hide($('tour-proposal')); startTour(); });
+$('tour-skip').addEventListener('click', () => hide($('tour-proposal')));
+
+function startTour() {
+  _tourIdx = -1;
+  document.addEventListener('keydown', _tourClavier);
+  tourSuivant();
+}
+
+/* Entrée/→ = suivant ; Échap = passer. */
+function _tourClavier(e) {
+  if (e.key === 'Escape') { e.preventDefault(); finirTour(); }
+  else if (e.key === 'Enter' || e.key === 'ArrowRight') { e.preventDefault(); tourSuivant(); }
+}
+
+function tourSuivant() {
+  _tourDespot();
+  _tourIdx++;
+  if (_tourIdx >= TOUR_STEPS.length) { finirTour(); proposerDemo(); return; }
+  const step = TOUR_STEPS[_tourIdx];
+  const el = document.querySelector(step.sel);
+  if (!el || el.offsetParent === null) { tourSuivant(); return; }   // absent → étape suivante
+  el.classList.add('tour-spot');       // spotlight : box-shadow 9999px assombri
+  _tourEl = el;
+  el.scrollIntoView({ block: 'nearest' });
+  $('tour-text').textContent = step.texte;
+  $('tour-progress').textContent = (_tourIdx + 1) + '/' + TOUR_STEPS.length;
+  show($('tour-bubble'));
+  positionnerBulleTour();
+}
+
+/* La bulle ne masque jamais l'élément : sous lui si la place existe,
+   au-dessus sinon ; à droite pour les éléments de la sidebar. Suit
+   l'élément au scroll et au redimensionnement. */
+function positionnerBulleTour() {
+  if (!_tourEl) return;
+  const r = _tourEl.getBoundingClientRect();
+  const b = $('tour-bubble');
+  const bw = b.offsetWidth || 320, bh = b.offsetHeight || 110;
+  let top, left;
+  if (r.left < 300 && r.width < 280 && r.right + bw + 16 < innerWidth) {
+    left = r.right + 14;                                   // sidebar → à droite
+    top  = Math.min(Math.max(12, r.top), innerHeight - bh - 12);
+  } else if (r.bottom + bh + 14 < innerHeight) {
+    top  = r.bottom + 12;                                  // dessous
+    left = Math.min(Math.max(12, r.left), innerWidth - bw - 12);
+  } else {
+    top  = Math.max(12, r.top - bh - 12);                  // dessus
+    left = Math.min(Math.max(12, r.left), innerWidth - bw - 12);
+  }
+  b.style.top = top + 'px';
+  b.style.left = left + 'px';
+}
+window.addEventListener('scroll', positionnerBulleTour, true);
+window.addEventListener('resize', positionnerBulleTour);
+
+function _tourDespot() {
+  if (_tourEl) { _tourEl.classList.remove('tour-spot'); _tourEl = null; }
+}
+
+function finirTour() {
+  document.removeEventListener('keydown', _tourClavier);
+  _tourDespot();
+  hide($('tour-bubble'));
+  _tourIdx = -1;
+}
+$('tour-next').addEventListener('click', tourSuivant);
+$('tour-pass').addEventListener('click', finirTour);
+
+/* ── Consultation de démonstration ── */
+
+function proposerDemo() { show($('demo-proposal')); }
+$('demo-later').addEventListener('click', () => hide($('demo-proposal')));
+
+$('demo-start').addEventListener('click', async () => {
+  hide($('demo-proposal'));
+  await api('set_demo_mode', true);
+  _demoEnCours = true;
+  // Étape 1 : la modale des deux modes, expliquée — le médecin DOIT choisir.
+  show($('demo-bulle-mode'));
+  openModeModal('cabinet');
+});
+
+/* Étape 5 : le résultat — .docx ouvert + verdict micro éventuel. */
+async function finirDemoUI() {
+  const data = (await api('get_consultations')) || [];
+  const d = data.find(c => c.demo === true);
+  if (d && d.file_path) api('open_file_os', d.file_path);
+  const dec = await api('get_decouverte');
+  const box = $('demo-final-micro');
+  const verdicts = {
+    adapte:      ['✅', 'verdict-ok',   'Au passage : votre microphone est adapté aux consultations au cabinet.'],
+    faible:      ['⚠️', 'verdict-warn', 'Au passage : votre microphone capte, mais faiblement. Un micro USB posé sur le bureau améliorerait le résultat.'],
+    insuffisant: ['❌', 'verdict-bad',  'Au passage : votre microphone capte mal à distance — pensez à un micro externe pour le mode cabinet.'],
+  };
+  const v = dec && verdicts[dec.demo_micro];
+  if (v) {
+    box.className = 'mictest-inline ' + v[1];
+    box.style.textAlign = 'left';
+    box.textContent = v[0] + ' ' + v[2];
+    show(box);
+  } else { hide(box); }
+  show($('demo-final'));
+}
+
+$('demo-final-ok').addEventListener('click', async () => {
+  hide($('demo-final'));
+  hide($('demo-bulle-mode'));
+  await api('set_demo_mode', false);
+  _demoEnCours = false;
+  await loadHome();
+  navigate('home');
+});
+
+/* ── Menu Aide & contact : rejouable à tout moment ── */
+
+$('nav-help').addEventListener('click', e => {
+  e.stopPropagation();
+  const menu = $('help-menu');
+  if (!menu.classList.contains('hidden')) { hide(menu); return; }
+  const r = $('nav-help').getBoundingClientRect();
+  menu.style.left = (r.right + 10) + 'px';
+  menu.style.bottom = Math.max(12, innerHeight - r.bottom) + 'px';
+  show(menu);
+});
+document.addEventListener('click', () => hide($('help-menu')));
+
+$('help-tour').addEventListener('click', async () => {
+  hide($('help-menu'));
+  await loadHome();
+  navigate('home');       // la visite pointe des zones de l'accueil
+  startTour();
+});
+$('help-demo').addEventListener('click', () => {
+  hide($('help-menu'));
+  proposerDemo();
+});
 
 /* ---- Test du microphone (onboarding + Paramètres) ---------------- */
 
@@ -1980,6 +2268,9 @@ async function openValidationScreen(cid, opts) {
   $('vcr-validate').textContent = serie ? '✓ Valider et suivant →' : '✓ Valider et enregistrer';
   $('vcr-skip').textContent     = serie ? 'Ignorer et suivant' : 'Ignorer le compte-rendu';
   $('vcr-later').textContent    = serie ? 'Terminer' : 'Valider plus tard';
+  // Démonstration, étape 4 : bulle appuyée sur LA validation.
+  const bulleDemo = $('demo-bulle-validation');
+  if (bulleDemo) (_demoEnCours && _vcrOrigine === 'consultation') ? show(bulleDemo) : hide(bulleDemo);
   navigate('validate-cr');
   await pollValidationData(!!(opts && opts.edition));
 }
@@ -2115,6 +2406,11 @@ async function vcrSortie(action) {
     await loadHome(); navigate('home');
     return;
   }
+  // Démonstration : pas de « Patient suivant » — étape 5, le résultat.
+  if (_demoEnCours) {
+    await finirDemoUI();
+    return;
+  }
   // Flux post-consultation : proposer d'enchaîner (Patient suivant).
   const titres = {
     valide:  'Compte-rendu enregistré',
@@ -2213,7 +2509,10 @@ let _serie = null;              // {items, idx, total, finMode, retourCid}
 let _serieNommage = {};         // id → détails nommage (extrait, suggestion)
 
 function _estIncomplete(c) {
-  return c && (c.nom_a_saisir === true || c.cr_valide === false);
+  // La DÉMONSTRATION n'est jamais « à compléter » : pas de bandeau, pas de
+  // badge, pas de file de rattrapage — aucune tâche en attente fictive.
+  if (!c || c.demo === true) return false;
+  return c.nom_a_saisir === true || c.cr_valide === false;
 }
 
 async function demarrerSerieRattrapage(cidPrio, finMode) {
@@ -2806,8 +3105,22 @@ async function showDetail(c) {
     hide($('detail-file-btns'));
   }
 
+  // Démonstration : badge dans le titre + bouton de suppression dédié.
+  const delDemo = $('detail-del-demo');
+  if (c.demo === true) {
+    $('detail-title').innerHTML = esc($('detail-title').textContent) +
+      ' <span class="badge-demo">Démonstration</span>';
+    show(delDemo);
+  } else {
+    hide(delDemo);
+  }
+
   navigate('detail', { key: c.id, restore: () => showDetail(c) });
 }
+
+$('detail-del-demo').addEventListener('click', () => {
+  if (currentConsult) openDeleteModal(currentConsult);   // modale démo (1 choix)
+});
 
 /* Rendu du bloc compte-rendu de la fiche : catégories colorées + puces.
    Statut : « ✓ Validé par le médecin » (bandeau « automatique » retiré) ou

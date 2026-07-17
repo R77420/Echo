@@ -1,8 +1,9 @@
 ; Installeur Inno Setup 6 pour l'application Écho
-; Transcription temps reel de consultation, 100% local.
+; Transcription temps reel de consultation. Audio jamais conserve ;
+; comptes-rendus et donnees patient stockes en local sur le poste.
 
 #define MyAppName "Écho"
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.2.0"
 #define MyAppPublisher "MOUSSA Rayane"
 #define MyAppExeName "Echo.exe"
 ; Dossier source du build onedir (surchargé via ISCC /DSrcDir=...).

@@ -29,6 +29,10 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 [data-theme="light"] {
   --bg-main:      #F7F8F7;
   --bg-card:      #FFFFFF;
+  /* Éléments FLOTTANTS (modales, panneaux, dropdowns, bulles) : fond
+     TOUJOURS opaque — jamais var(--bg-card), semi-transparente en sombre.
+     Verrouillé par tests/test_css_conformite.py. */
+  --bg-float:     #FFFFFF;
   --bg-sidebar:   #FFFFFF;
   --sidebar-text: #48564F;
   --sidebar-act:  #14302A;
@@ -51,7 +55,8 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 
 [data-theme="dark"] {
   --bg-main:      #0F1F1B;
-  --bg-card:      #15292340;          /* rgba(21,41,35,0.25) */
+  --bg-card:      #15292340;          /* rgba(21,41,35,0.25) — effet verre, cartes EN PAGE uniquement */
+  --bg-float:     #1a2e28;            /* flottants : opaque, on ne lit jamais à travers */
   --bg-sidebar:   #0A1714;
   --sidebar-text: #C5D2CD;
   --sidebar-act:  #FFFFFF;
@@ -189,8 +194,7 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   top: 12px;
   left: calc(var(--sidebar-w, 220px) + 8px);
   width: 280px;
-  /* Fond opaque explicite — var(--bg-card) est semi-transparent en dark */
-  background: #ffffff;
+  background: var(--bg-float);
   border: 1px solid #e0e7e4;
   box-shadow: 0 8px 32px rgba(0,0,0,0.15);
   border-radius: 14px;
@@ -199,7 +203,6 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   animation: panelIn 0.18s ease;
 }
 [data-theme="dark"] .profile-panel {
-  background: #1a2e28;
   border: 1px solid rgba(255,255,255,0.12);
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
@@ -408,9 +411,7 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 }
 .confirm-overlay.hidden { display: none; }
 .confirm-box {
-  /* Fond OPAQUE explicite : var(--bg-card) est semi-transparent en dark
-     (effet verre voulu pour les cartes, mais illisible pour une modale). */
-  background: #ffffff;
+  background: var(--bg-float);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: 0 12px 40px rgba(0,0,0,0.22);
@@ -419,7 +420,6 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
   padding: 24px;
 }
 [data-theme="dark"] .confirm-box {
-  background: #1a2e28;
   border: 1px solid rgba(255,255,255,0.12);
 }
 .confirm-title {
@@ -779,11 +779,10 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 .combo-wrap { position: relative; }
 .combo-list {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
-  background: var(--bg-card); border: 1px solid var(--border);
+  background: var(--bg-float); border: 1px solid var(--border);
   border-radius: var(--r-sm); overflow: hidden auto; max-height: 240px;
   box-shadow: var(--shadow-card, 0 8px 24px rgba(0,0,0,0.18));
 }
-[data-theme="dark"] .combo-list { background: #1a2e28; }
 .combo-item {
   padding: 9px 12px; font-size: 13.5px; color: var(--txt-primary);
   cursor: pointer;
@@ -794,12 +793,12 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 .mode-cards { display: flex; gap: 14px; margin: 20px 0; }
 .mode-card {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 22px 16px; background: #ffffff;   /* opaque : carte dans une modale */
+  padding: 22px 16px; background: var(--bg-float);   /* opaque : carte dans une modale */
   border: 2px solid var(--border); border-radius: var(--r-md);
   cursor: pointer; text-align: center; font-family: inherit;
   transition: border-color var(--t), background var(--t), transform var(--t);
 }
-[data-theme="dark"] .mode-card { background: #16271f; border-color: rgba(255,255,255,0.1); }
+[data-theme="dark"] .mode-card { border-color: rgba(255,255,255,0.1); }
 .mode-card:hover { border-color: var(--accent); background: var(--accent-lt); transform: translateY(-2px); }
 [data-theme="dark"] .mode-card:hover { background: var(--accent-lt); }
 
@@ -1321,6 +1320,7 @@ input[type="range"] {
 .overlay-app {
   --bg-app:     #0F1F1B;   /* vert très sombre (cohérent avec le thème sombre Écho) */
   --bg-surface: #16271F;   /* cartes / champs / panneau */
+  --bg-float:   #1a2e28;   /* flottants (dropdowns, panneaux) : opaque */
   --bg-bar:     #0A1714;   /* barres header / footer */
   --chip-m-bg:  #1A3530;
   --chip-m-fg:  #3ECF8E;
@@ -1720,7 +1720,7 @@ input[type="range"] {
 .ac-wrap { position: relative; }
 .ac-list {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
-  background: var(--bg-surface); border: 1px solid var(--border);
+  background: var(--bg-float, var(--bg-surface)); border: 1px solid var(--border);
   border-radius: 9px; overflow: hidden;
   box-shadow: 0 8px 24px rgba(0,0,0,0.45);
 }
@@ -1746,7 +1746,7 @@ input[type="range"] {
 .settings-panel {
   position: fixed; top: 0; right: 0; bottom: 0;
   width: 300px;
-  background: var(--bg-surface);
+  background: var(--bg-float, var(--bg-surface));
   border-left: 1px solid var(--border);
   z-index: 300;
   display: flex; flex-direction: column;
@@ -1888,3 +1888,65 @@ input[type="range"] {
 }
 .pd-synth-ligne { font-size: 13.5px; line-height: 1.55; color: var(--txt-primary); }
 .pd-synth-lbl   { color: var(--txt-secondary); }
+
+/* ── Prise en main : visite guidée (coach marks) ─────────────── */
+/* Spotlight : l'élément visé reste lumineux, tout le reste est
+   assombri par son ombre portée géante. */
+.tour-spot {
+  position: relative; z-index: 10001;
+  box-shadow: 0 0 0 4px rgba(255,255,255,0.25), 0 0 0 9999px rgba(0,0,0,0.6);
+  border-radius: var(--r-md);
+}
+.tour-bubble {
+  position: fixed; z-index: 10002; max-width: 330px;
+  background: var(--bg-float); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: 0 10px 36px rgba(0,0,0,0.45);
+  padding: 14px 16px;
+}
+[data-theme="dark"] .tour-bubble { border-color: rgba(255,255,255,0.14); }
+.tour-bubble-text { font-size: 14px; line-height: 1.5; color: var(--txt-primary); }
+.tour-bubble-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.tour-progress { font-size: 11.5px; color: var(--txt-secondary); }
+.tour-pass {
+  background: none; border: none; cursor: pointer;
+  font-size: 12px; color: var(--txt-secondary); padding: 4px 6px;
+}
+.tour-pass:hover { color: var(--txt-primary); }
+
+/* ── Bulles de la démonstration (modales + overlay) ──────────── */
+.demo-bulle {
+  margin-top: 12px; padding: 11px 14px; font-size: 13px; line-height: 1.5;
+  background: rgba(31,122,92,0.08); border: 1px solid var(--accent);
+  border-radius: var(--r-md); color: var(--txt-primary); text-align: left;
+}
+
+/* ── Badge « Démonstration » ─────────────────────────────────── */
+.badge-demo {
+  display: inline-block; margin-left: 8px; padding: 2px 8px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.3px;
+  color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 20px; vertical-align: 2px;
+}
+
+/* ── Menu Aide & contact ─────────────────────────────────────── */
+.help-menu {
+  position: fixed; z-index: 10003; min-width: 260px;
+  background: var(--bg-float); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+  padding: 6px; display: flex; flex-direction: column;
+}
+.help-menu-item {
+  background: none; border: none; cursor: pointer; text-align: left;
+  padding: 10px 12px; font-size: 13px; color: var(--txt-primary);
+  border-radius: var(--r-sm);
+}
+.help-menu-item:hover { background: var(--bg-main); }
+
+/* ── Overlay : script de démonstration ───────────────────────── */
+.demo-script {
+  margin: 10px 12px 0; padding: 12px 14px;
+  background: rgba(52,216,153,0.07); border: 1px solid rgba(52,216,153,0.5);
+  border-radius: 10px; font-size: 12.5px; line-height: 1.55;
+}
+.demo-script-titre { font-weight: 600; margin-bottom: 8px; }
+.demo-script-ligne { margin: 3px 0; font-style: italic; opacity: 0.95; }

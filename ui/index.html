@@ -78,6 +78,18 @@
   <div id="no-mic-banner" class="hidden o-banner o-banner-warn"
        style="border-radius:0;border-left:none;border-right:none;border-top:none;"></div>
 
+  <!-- Démonstration : script à lire à voix haute (les deux rôles) -->
+  <div id="demo-script" class="demo-script hidden">
+    <div class="demo-script-titre">Lisez ce dialogue à voix haute, à votre rythme — jouez les deux rôles :</div>
+    <div class="demo-script-ligne">— Bonjour Madame Dubois, qu'est-ce qui vous amène&nbsp;?</div>
+    <div class="demo-script-ligne">— J'ai mal au dos depuis une semaine, surtout le matin.</div>
+    <div class="demo-script-ligne">— Je vais vous prescrire du Doliprane, un gramme trois fois par jour.
+      Revenez me voir dans quinze jours si ça persiste.</div>
+    <div class="demo-bulle" id="demo-bulle-transcription">
+      Regardez&nbsp;: Écho transcrit et distingue déjà qui parle.
+    </div>
+  </div>
+
   <!-- Zone de transcription -->
   <div id="transcript" class="ov-transcript">
     <div class="ov-waiting" id="ov-waiting">
@@ -171,6 +183,10 @@
         <div class="ac-list hidden" id="p-nom-ac"></div>
       </div>
       <div class="m-err hidden" id="p-nom-err">Ce champ est obligatoire.</div>
+      <div class="demo-bulle hidden" id="p-demo-suggere">
+        ✨ Écho a entendu le nom dans votre phrase et vous le propose.
+        Vous gardez toujours le dernier mot.
+      </div>
     </div>
     <div class="m-field">
       <label class="m-label">Prénom <span style="color:var(--txt-sys)">(facultatif)</span></label>
@@ -478,6 +494,8 @@ function applyModeUI(mode) {
 /*  Initialisation                                                     */
 /* ------------------------------------------------------------------ */
 
+let _demoActive = false;   // consultation de démonstration (prise en main)
+
 onReady(async () => {
   // Si l'overlay s'est ouvert via begin_consultation(), il n'a pas de sélecteur
   // affiché — on passe directement à la vue main. Sinon on montre le sélecteur.
@@ -490,6 +508,13 @@ onReady(async () => {
   startConsultationUI(state && state.mode_consultation);
   // Charger les péri pour le panneau settings.
   loadSettingsPanel();
+  // Démonstration : script à lire + bouton « J'ai terminé ».
+  const demo = await api('get_demo_actif');
+  _demoActive = !!(demo && demo.actif);
+  if (_demoActive) {
+    show($('demo-script'));
+    $('btn-quit').querySelector('span').textContent = "J'ai terminé";
+  }
 });
 
 /* Traite chaque update : intercepte les signaux de contrôle, sinon affiche. */
@@ -683,6 +708,17 @@ async function startSaveFlow() {
     $('p-nom').value    = presel.nom;
     $('p-prenom').value = presel.prenom || '';
     $('p-ddn').value    = presel.ddn || '';
+  }
+  // Démonstration (étape 3) : le nom entendu dans la conversation est
+  // SUGGÉRÉ (badge ✨) — jamais rempli en silence, le médecin garde la main.
+  hide($('p-demo-suggere'));
+  if (_demoActive && !$('p-nom').value) {
+    const sug = await api('suggerer_nom_patient');
+    if (sug && sug.nom) {
+      $('p-nom').value = sug.nom;
+      if (sug.prenom) $('p-prenom').value = sug.prenom;
+      show($('p-demo-suggere'));
+    }
   }
   show($('modal-patient'));
   $('p-nom').focus();
