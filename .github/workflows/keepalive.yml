@@ -1,0 +1,35 @@
+name: Supabase Keepalive
+
+# Empêche la mise en pause du projet Supabase (plan gratuit : pause après
+# ~7 jours d'inactivité, et le sous-domaine du projet cesse alors de résoudre
+# → « Erreur réseau » à l'inscription pour tous les médecins).
+# Le ping touche l'Edge Function ET la base (verifier-licence fait une
+# requête), ce qui compte comme activité. La clé licence bidon renvoie
+# « non valide » — sans importance, seul le fait de toucher la base compte.
+on:
+  schedule:
+    - cron: '0 8 */3 * *'   # tous les 3 jours à 8h UTC (marge large sous 7 j)
+  workflow_dispatch:          # déclenchable manuellement aussi
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Echo API
+        # La clé anon Supabase est PUBLIQUE (déjà embarquée dans le client) :
+        # en clair ici pour ne pas dépendre d'un secret GitHub à configurer.
+        # Le code HTTP est journalisé pour diagnostiquer un projet en pause
+        # (000 = DNS/injoignable) sans jamais faire échouer le job.
+        run: |
+          CODE=$(curl -s -o /tmp/body -w '%{http_code}' -X POST \
+            "https://muxoyiitqdnehuvbwcac.supabase.co/functions/v1/echo-api/verifier-licence" \
+            -H "Content-Type: application/json" \
+            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11eG95aWl0cWRuZWh1dmJ3Y2FjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MTA0NjksImV4cCI6MjA5Nzk4NjQ2OX0.4E40ECsuOlPSJIPfHdAPZc771qRa_qF6DDSKhWn76TA" \
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11eG95aWl0cWRuZWh1dmJ3Y2FjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MTA0NjksImV4cCI6MjA5Nzk4NjQ2OX0.4E40ECsuOlPSJIPfHdAPZc771qRa_qF6DDSKhWn76TA" \
+            -d '{"cle_licence":"keepalive-ping"}' \
+            --max-time 30 || true)
+          echo "HTTP $CODE"
+          echo "Réponse : $(head -c 300 /tmp/body 2>/dev/null)"
+          if [ "$CODE" = "000" ]; then
+            echo "::warning::Projet Supabase injoignable (DNS/timeout) — probablement EN PAUSE : le restaurer depuis le dashboard."
+          fi

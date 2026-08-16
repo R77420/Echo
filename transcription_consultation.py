@@ -49,6 +49,8 @@ import time
 import tkinter as tk
 import unicodedata
 import urllib.request
+import urllib.error
+import socket
 import uuid
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
@@ -1779,8 +1781,22 @@ _SUPABASE_ANON = (
 )
 
 
+# Dernière erreur d'appel API, lisible par les appelants pour un message
+# précis (l'ancien « Erreur réseau » fourre-tout masquait la vraie cause).
+_derniere_erreur_api = {"type": None, "detail": ""}
+
+
 def _appel_api(endpoint, payload, timeout=10):
-    """POST JSON vers l'API Écho. Renvoie le dict JSON ou None si erreur réseau."""
+    """POST JSON vers l'API Écho (Edge Function Supabase, en-tête
+    Authorization = clé anon obligatoire).
+    Renvoie le dict JSON de la réponse, ou None en cas d'échec — auquel
+    cas _derniere_erreur_api distingue :
+      'dns'     : le domaine ne résout pas (projet Supabase absent/en pause)
+      'reseau'  : pas de connexion / timeout
+      'http'    : le serveur a RÉPONDU une erreur (code + corps JSON si présent)
+      'reponse' : réponse illisible (JSON invalide)."""
+    global _derniere_erreur_api
+    _derniere_erreur_api = {"type": None, "detail": ""}
     url = _ECHO_API + "/" + endpoint.lstrip("/")
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -1788,14 +1804,64 @@ def _appel_api(endpoint, payload, timeout=10):
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + _SUPABASE_ANON,
+            "apikey": _SUPABASE_ANON,
         },
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except urllib.error.HTTPError as e:
+        # Le serveur a répondu : ce N'EST PAS une erreur réseau. On tente
+        # de rendre le JSON (l'API renvoie souvent {ok:false,error:...}
+        # avec un 4xx) pour que l'appelant affiche le vrai message.
+        corps = ""
+        try:
+            corps = e.read().decode("utf-8", "replace")
+            d = json.loads(corps)
+            if isinstance(d, dict):
+                d.setdefault("ok", False)
+                d.setdefault("error", "Le serveur a répondu une erreur (HTTP %d)." % e.code)
+                _derniere_erreur_api = {"type": "http", "detail": "HTTP %d" % e.code}
+                return d
+        except Exception:
+            pass
+        _derniere_erreur_api = {"type": "http",
+                                "detail": "HTTP %d %s" % (e.code, corps[:120])}
         return None
+    except urllib.error.URLError as e:
+        raison = str(getattr(e, "reason", e))
+        if "getaddrinfo" in raison or "11001" in raison or "Name or service" in raison:
+            _derniere_erreur_api = {"type": "dns", "detail": raison}
+        else:
+            _derniere_erreur_api = {"type": "reseau", "detail": raison}
+        return None
+    except (socket.timeout, TimeoutError) as e:
+        _derniere_erreur_api = {"type": "reseau", "detail": "timeout"}
+        return None
+    except ValueError as e:               # JSON invalide
+        _derniere_erreur_api = {"type": "reponse", "detail": str(e)}
+        return None
+    except Exception as e:
+        _derniere_erreur_api = {"type": "reseau", "detail": str(e)}
+        return None
+
+
+def _message_erreur_api():
+    """Message utilisateur précis selon la dernière erreur d'appel API."""
+    t = _derniere_erreur_api.get("type")
+    if t == "dns":
+        return ("Le serveur Écho est injoignable (adresse introuvable). "
+                "Vérifiez votre connexion internet ; si elle fonctionne, "
+                "le service est peut-être temporairement indisponible.")
+    if t == "reseau":
+        return "Pas de connexion internet, ou serveur trop lent à répondre. Réessayez."
+    if t == "http":
+        return ("Le serveur a répondu une erreur (%s). Réessayez dans un instant."
+                % _derniere_erreur_api.get("detail", ""))
+    if t == "reponse":
+        return "Réponse du serveur illisible. Réessayez."
+    return "Erreur réseau. Vérifiez votre connexion."
 
 
 def _verifier_licence(cle_licence):
@@ -2323,7 +2389,7 @@ class Api:
             "mot_de_passe": password, "specialite": specialty,
         })
         if not res:
-            return {"ok": False, "error": "Erreur réseau. Vérifiez votre connexion."}
+            return {"ok": False, "error": _message_erreur_api()}
         if not res.get("ok"):
             return {"ok": False, "error": res.get("error", "Inscription échouée.")}
         cfg = charger_config()
@@ -2344,7 +2410,7 @@ class Api:
         """Connecte un médecin existant. Stocke cle_licence et infos dans config."""
         res = _appel_api("connexion", {"email": email, "mot_de_passe": password})
         if not res:
-            return {"ok": False, "error": "Erreur réseau. Vérifiez votre connexion."}
+            return {"ok": False, "error": _message_erreur_api()}
         if not res.get("ok"):
             return {"ok": False, "error": res.get("error", "Identifiants incorrects.")}
         cfg = charger_config()
