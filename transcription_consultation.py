@@ -97,7 +97,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "2.2.1"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "2.2.2"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -1604,26 +1604,52 @@ def _version_tuple(v):
     return tuple(int(x) for x in str(v).strip().split("."))
 
 
-def verifier_mise_a_jour():
-    """Interroge la dernière release GitHub. Silencieux en cas d'erreur réseau.
-    Retourne {disponible: bool, version?, url?}."""
+def _log_update(msg):
+    """Journal de la mise à jour auto : %APPDATA%\\Echo\\update.log (toujours
+    actif, une ligne par vérification — l'échec silencieux d'avant a caché
+    pendant des mois que l'auto-update ne marchait pas)."""
     try:
-        import requests
-        r = requests.get(
-            "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO,
-            timeout=5,
-        )
-        data = r.json()
-        derniere = str(data["tag_name"]).lstrip("v")
-        if _version_tuple(derniere) > _version_tuple(APP_VERSION):
-            url = next(
-                a["browser_download_url"]
-                for a in data["assets"]
-                if a["name"].endswith(".exe")
-            )
-            return {"disponible": True, "version": derniere, "url": url}
+        dossier = os.path.join(os.environ.get("APPDATA", ""), "Echo")
+        os.makedirs(dossier, exist_ok=True)
+        with open(os.path.join(dossier, "update.log"), "a", encoding="utf-8") as f:
+            f.write("%s  %s\n" % (datetime.datetime.now().isoformat(timespec="seconds"), msg))
     except Exception:
         pass
+
+
+def verifier_mise_a_jour():
+    """Interroge la dernière release GitHub (stdlib uniquement : l'ancienne
+    version importait `requests`, non embarqué dans le build → ImportError
+    avalée → l'auto-update n'a JAMAIS fonctionné, silencieusement).
+    Retourne {disponible: bool, version?, url?} ; tout échec est journalisé."""
+    url_api = "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO
+    try:
+        req = urllib.request.Request(url_api, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Echo-app/" + APP_VERSION,   # exigé par l'API GitHub
+        })
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        derniere = str(data.get("tag_name", "")).lstrip("v")   # 'v2.2.1' → '2.2.1'
+        if not derniere:
+            _log_update("réponse sans tag_name (rate limit ?) : %s"
+                        % str(data)[:120])
+            return {"disponible": False}
+        if _version_tuple(derniere) > _version_tuple(APP_VERSION):
+            url = next(
+                (a["browser_download_url"] for a in data.get("assets", [])
+                 if a["name"].endswith(".exe")), None)
+            if url is None:
+                _log_update("v%s disponible mais aucun .exe attaché" % derniere)
+                return {"disponible": False}
+            _log_update("v%s disponible (locale v%s)" % (derniere, APP_VERSION))
+            return {"disponible": True, "version": derniere, "url": url}
+        _log_update("à jour (locale v%s, GitHub v%s)" % (APP_VERSION, derniere))
+        return {"disponible": False}
+    except urllib.error.HTTPError as e:
+        _log_update("échec HTTP %d sur %s" % (e.code, url_api))
+    except Exception as e:
+        _log_update("échec vérification : %s: %s" % (type(e).__name__, e))
     return {"disponible": False}
 
 
@@ -1643,21 +1669,24 @@ def _dl_update(url):
         _download_state["update"].update(
             {"downloaded": 0, "speed": 0.0, "done": False, "error": None})
     try:
-        import requests
-        with requests.get(url, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", 0)) or \
+        # stdlib uniquement (même piège que verifier_mise_a_jour : `requests`
+        # n'est pas embarqué dans le build).
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Echo-app/" + APP_VERSION})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            total = int(r.headers.get("content-length") or 0) or \
                 _download_state["update"]["total"]
             with _download_lock:
                 _download_state["update"]["total"] = total
             dl = 0
             t0 = time.time()
             with open(dest, "wb") as f:
-                for chunk in r.iter_content(chunk_size=262144):
+                while True:
                     if stop_event.is_set():
                         break
+                    chunk = r.read(262144)
                     if not chunk:
-                        continue
+                        break
                     f.write(chunk)
                     dl += len(chunk)
                     dt = time.time() - t0
@@ -1666,6 +1695,7 @@ def _dl_update(url):
                         _download_state["update"]["speed"] = \
                             round(dl / dt / 1_000_000, 1) if dt > 0 else 0.0
         _update_file = dest
+        _log_update("EchoSetup.exe téléchargé (%d octets)" % dl)
         with _download_lock:
             _download_state["update"]["done"]       = True
             _download_state["update"]["downloaded"] = _download_state["update"]["total"]
