@@ -1,6 +1,28 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
+// Hash mot de passe — MÊME schéma partout (inscription, connexion, reset) :
+// SHA-256(mot_de_passe + email), hex.
+async function hashMotDePasse(motDePasse: string, email: string): Promise<string> {
+  const data = new TextEncoder().encode(motDePasse + email)
+  const buf = await crypto.subtle.digest("SHA-256", data)
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("")
+}
+
+// Code à 6 chiffres cryptographiquement aléatoire (jamais Math.random).
+function genererCode(): string {
+  const n = new Uint32Array(1)
+  crypto.getRandomValues(n)
+  return String(n[0] % 1_000_000).padStart(6, "0")
+}
+
+// Jeton opaque prouvant l'email vérifié (stocké en base, courte durée).
+function genererJeton(): string {
+  const b = new Uint8Array(32)
+  crypto.getRandomValues(b)
+  return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join("")
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Admin-Key",
@@ -26,8 +48,31 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseKey)
 
   // ═══ INSCRIPTION ═══
+  // Exige un jeton_verification obtenu via /demander-code + /verifier-code :
+  // l'email est PROUVÉ avant toute création de compte.
   if (path === "/inscription" && req.method === "POST") {
-    const { email, mot_de_passe, nom, specialite } = await req.json()
+    const { email, mot_de_passe, nom, specialite, jeton_verification } = await req.json()
+
+    if (!jeton_verification) {
+      return new Response(
+        JSON.stringify({ ok: false, verification_requise: true,
+                         erreur: "Vérification de l'email requise" }),
+        { status: 401, headers: corsHeaders }
+      )
+    }
+    const { data: jetons } = await supabase
+      .from("jetons_verification")
+      .select("*")
+      .eq("email", email).eq("type", "inscription").eq("jeton", jeton_verification)
+      .limit(1)
+    const jeton = jetons && jetons[0]
+    if (!jeton || new Date(jeton.expire_le).getTime() < Date.now()) {
+      return new Response(
+        JSON.stringify({ ok: false, verification_requise: true,
+                         erreur: "Vérification expirée, recommencez" }),
+        { status: 401, headers: corsHeaders }
+      )
+    }
 
     const { data: existant } = await supabase
       .from("medecins")
@@ -41,11 +86,7 @@ serve(async (req) => {
       )
     }
 
-    const encoder = new TextEncoder()
-    const data = encoder.encode(mot_de_passe + email)
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data)
-    const hashArray = Array.from(new Uint8Array(hashBuffer))
-    const hash = hashArray.map(b => b.toString(16).padStart(2, "0")).join("")
+    const hash = await hashMotDePasse(mot_de_passe, email)
 
     const { data: medecin, error } = await supabase
       .from("medecins")
@@ -85,6 +126,9 @@ serve(async (req) => {
       .insert({ medecin_id: medecin.id, active: false })
       .select()
       .single()
+
+    // Jeton à usage unique : consommé par la création du compte.
+    await supabase.from("jetons_verification").delete().eq("id", jeton.id)
 
     return new Response(JSON.stringify({
       ok: true,
@@ -270,6 +314,229 @@ serve(async (req) => {
       JSON.stringify({ ok: true }),
       { headers: corsHeaders }
     )
+  }
+
+  // ═══ DEMANDER UN CODE DE VÉRIFICATION (inscription / reset) ═══
+  if (path === "/demander-code" && req.method === "POST") {
+    const { email, type } = await req.json()
+
+    if (!email || !["inscription", "reset"].includes(type)) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "email ou type manquant" }),
+        { status: 400, headers: corsHeaders }
+      )
+    }
+
+    const { data: existants } = await supabase
+      .from("medecins")
+      .select("id")
+      .eq("email", email)
+    const compteExiste = !!(existants && existants.length > 0)
+
+    if (type === "inscription" && compteExiste) {
+      return new Response(
+        JSON.stringify({ ok: false, email_pris: true,
+                         erreur: "Un compte existe déjà avec cet email" }),
+        { headers: corsHeaders }
+      )
+    }
+    if (type === "reset" && !compteExiste) {
+      // Réponse NEUTRE : ne jamais révéler si un email est enregistré.
+      // Aucun code n'est créé ni envoyé.
+      console.log(`demander-code reset: email inconnu (réponse neutre)`)
+      return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders })
+    }
+
+    // Anti-abus : max 3 codes par (email, type) sur 15 minutes.
+    const il15min = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+    const { count: recents } = await supabase
+      .from("codes_verification")
+      .select("id", { count: "exact", head: true })
+      .eq("email", email).eq("type", type)
+      .gte("cree_le", il15min)
+    if ((recents ?? 0) >= 3) {
+      return new Response(
+        JSON.stringify({ ok: false,
+                         erreur: "Trop de demandes, réessayez dans quelques minutes" }),
+        { status: 429, headers: corsHeaders }
+      )
+    }
+
+    const resendKey = Deno.env.get("RESEND_API_KEY")
+    if (!resendKey) {
+      console.error("demander-code: RESEND_API_KEY absente des secrets")
+      return new Response(
+        JSON.stringify({ ok: false,
+                         erreur: "Impossible d'envoyer l'email pour le moment, réessayez dans quelques minutes" }),
+        { status: 500, headers: corsHeaders }
+      )
+    }
+
+    const code = genererCode()
+
+    // Envoi AVANT insertion : jamais de code en base sans email parti.
+    // From : sous-domaine send.echo-medical.fr — le seul vérifié dans Resend.
+    const resendRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${resendKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "Écho <verification@send.echo-medical.fr>",
+        to: [email],
+        subject: "Votre code de vérification Écho",
+        html:
+          `<div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#14302A;">` +
+          `<p>Bonjour,</p>` +
+          `<p>Votre code de vérification Écho est : <strong style="font-size:20px;letter-spacing:2px;">${code}</strong></p>` +
+          `<p>Il expire dans 10 minutes.</p>` +
+          `<p>Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>` +
+          `<hr style="border:none;border-top:1px solid #E9ECE9;margin:18px 0;">` +
+          `<p style="font-size:12px;color:#6B7C76;">Écho — assistant de consultation médicale<br>` +
+          `Cet email a été envoyé automatiquement, merci de ne pas y répondre.</p>` +
+          `</div>`,
+      }),
+    })
+    if (!resendRes.ok) {
+      console.error(`demander-code: Resend HTTP ${resendRes.status} — ${await resendRes.text()}`)
+      return new Response(
+        JSON.stringify({ ok: false,
+                         erreur: "Impossible d'envoyer l'email pour le moment, réessayez dans quelques minutes" }),
+        { status: 502, headers: corsHeaders }
+      )
+    }
+
+    // Purge des anciens codes du même couple, puis insertion du nouveau.
+    await supabase.from("codes_verification")
+      .delete().eq("email", email).eq("type", type)
+    const { error: errInsert } = await supabase.from("codes_verification").insert({
+      email, code, type,
+      expire_le: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    })
+    if (errInsert) {
+      console.error("demander-code: insertion code impossible", errInsert)
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Erreur serveur, réessayez" }),
+        { status: 500, headers: corsHeaders }
+      )
+    }
+
+    console.log(`demander-code: code ${type} envoyé à ${email}`)
+    return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders })
+  }
+
+  // ═══ VÉRIFIER UN CODE → JETON ═══
+  if (path === "/verifier-code" && req.method === "POST") {
+    const { email, code, type } = await req.json()
+
+    if (!email || !code || !["inscription", "reset"].includes(type)) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "email, code ou type manquant" }),
+        { status: 400, headers: corsHeaders }
+      )
+    }
+
+    const { data: enr } = await supabase
+      .from("codes_verification")
+      .select("*")
+      .eq("email", email).eq("type", type)
+      .order("cree_le", { ascending: false })
+      .limit(1)
+    const c = enr && enr[0]
+
+    if (!c) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Code incorrect" }),
+        { headers: corsHeaders }
+      )
+    }
+    if (c.tentatives >= 5) {
+      return new Response(
+        JSON.stringify({ ok: false,
+                         erreur: "Trop de tentatives, demandez un nouveau code" }),
+        { headers: corsHeaders }
+      )
+    }
+    if (new Date(c.expire_le).getTime() < Date.now()) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Code expiré" }),
+        { headers: corsHeaders }
+      )
+    }
+    if (c.code !== String(code).trim()) {
+      await supabase.from("codes_verification")
+        .update({ tentatives: c.tentatives + 1 }).eq("id", c.id)
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Code incorrect" }),
+        { headers: corsHeaders }
+      )
+    }
+
+    // Succès : le code est consommé, un jeton court (15 min) le remplace.
+    const jeton = genererJeton()
+    const { error: errJeton } = await supabase.from("jetons_verification").insert({
+      email, type, jeton,
+      expire_le: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    })
+    if (errJeton) {
+      console.error("verifier-code: insertion jeton impossible", errJeton)
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Erreur serveur, réessayez" }),
+        { status: 500, headers: corsHeaders }
+      )
+    }
+    await supabase.from("codes_verification").delete().eq("id", c.id)
+
+    console.log(`verifier-code: email ${email} vérifié (${type})`)
+    return new Response(
+      JSON.stringify({ ok: true, jeton_verification: jeton }),
+      { headers: corsHeaders }
+    )
+  }
+
+  // ═══ RÉINITIALISER LE MOT DE PASSE ═══
+  if (path === "/reinitialiser-mot-de-passe" && req.method === "POST") {
+    const { email, jeton_verification, nouveau_mot_de_passe } = await req.json()
+
+    if (!email || !jeton_verification || !nouveau_mot_de_passe) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Champs manquants" }),
+        { status: 400, headers: corsHeaders }
+      )
+    }
+
+    const { data: jetons } = await supabase
+      .from("jetons_verification")
+      .select("*")
+      .eq("email", email).eq("type", "reset").eq("jeton", jeton_verification)
+      .limit(1)
+    const j = jetons && jetons[0]
+    if (!j || new Date(j.expire_le).getTime() < Date.now()) {
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Vérification expirée, recommencez" }),
+        { status: 401, headers: corsHeaders }
+      )
+    }
+
+    const hash = await hashMotDePasse(nouveau_mot_de_passe, email)
+    const { error: errMaj } = await supabase
+      .from("medecins")
+      .update({ mot_de_passe_hash: hash })
+      .eq("email", email)
+    if (errMaj) {
+      console.error("reinitialiser-mot-de-passe:", errMaj)
+      return new Response(
+        JSON.stringify({ ok: false, erreur: "Erreur serveur, réessayez" }),
+        { status: 500, headers: corsHeaders }
+      )
+    }
+
+    // Jeton à usage unique : invalidé après emploi.
+    await supabase.from("jetons_verification").delete().eq("id", j.id)
+
+    console.log(`reinitialiser-mot-de-passe: mot de passe changé pour ${email}`)
+    return new Response(JSON.stringify({ ok: true }), { headers: corsHeaders })
   }
 
   return new Response(

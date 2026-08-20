@@ -204,6 +204,8 @@ def _parse_elements_json(brut):
     try:
         d = _json.loads(m.group(0))
     except Exception:
+        # Ignorable par design : JSON malformé du LLM → l'appelant retente
+        # puis retombe sur elements_vides() (testé : test_json_malforme_failsafe).
         return None
     if not isinstance(d, dict):
         return None
@@ -232,6 +234,9 @@ def extraire_elements_cr(transcript, api_key):
         import openai
         client = openai.OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
     except Exception:
+        # Sans client, AUCUN compte-rendu ne sera extrait : à tracer.
+        from journal_erreurs import journaliser
+        journaliser("extraire_elements_cr: client Groq impossible")
         return elements_vides()
     messages = [
         {"role": "system", "content": EXTRACTION_SYSTEM},

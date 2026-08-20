@@ -79,6 +79,9 @@ class EchoTray:
             self._thread.start()
             return True
         except Exception:
+            # Sans tray, « X » minimise vers rien : l'app semble disparue.
+            from journal_erreurs import journaliser
+            journaliser("tray.demarrer: icône barre système impossible")
             self._icon = None
             return False
 

@@ -16,9 +16,13 @@ renvoie le texte original inchangé.
 import logging
 import re
 
+from journal_erreurs import journaliser
+
 try:
     from GROQ_KEY import GROQ_API_KEY
 except Exception:
+    # Sans clé : correction/attribution/détection de nom toutes mortes.
+    journaliser("correction: GROQ_KEY.py introuvable/illisible")
     GROQ_API_KEY = ""
 
 GROQ_BASE_URL   = "https://api.groq.com/openai/v1"
@@ -91,6 +95,7 @@ def _client(timeout):
                              base_url=GROQ_BASE_URL,
                              timeout=timeout)
     except Exception:
+        journaliser("correction._client: création du client Groq impossible")
         return None
 
 

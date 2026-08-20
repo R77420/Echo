@@ -97,14 +97,19 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "2.2.2"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "2.3.0"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
 # Gérée par l'éditeur ; jamais affichée dans l'UI ni écrite dans les logs.
+from journal_erreurs import journaliser, installer_hooks
+
 try:
     from GROQ_KEY import GROQ_API_KEY
 except Exception:
+    # Sans clé, AUCUNE transcription cloud ne marchera : panne majeure,
+    # toujours tracée (l'app continue pour laisser consulter l'historique).
+    journaliser("GROQ_KEY.py introuvable/illisible — transcription cloud morte")
     GROQ_API_KEY = ""
 
 MODEL_SIZE   = "large-v3-turbo"  # bench: RTF 0.95 sur CPU, meilleur que small sur vocab médical
@@ -179,7 +184,11 @@ def charger_config():
         with open(chemin_config(), "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}          # premier lancement : pas encore de config, normal
     except Exception:
+        # Config corrompue : tous les réglages semblent « perdus » — tracer.
+        journaliser("charger_config: config.json illisible")
         return {}
 
 
@@ -190,7 +199,8 @@ def sauver_config(cfg):
         with open(chemin_config(), "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception:
-        pass
+        # Réglages silencieusement perdus sinon (disque plein, droits…).
+        journaliser("sauver_config: écriture config.json impossible")
 
 
 def chemin_consultations():
@@ -524,6 +534,7 @@ def capturer(source_factory, label):
                     if audible is not None:
                         segment_queue.put((label, segment))
     except Exception:
+        journaliser("capturer(%s): démarrage de la capture impossible" % label)
         display_queue.put(("AVIS",
             "Impossible de démarrer la capture (%s). Vérifiez le périphérique audio." % libelle))
     finally:
@@ -774,6 +785,8 @@ def _init_cloud_client():
         return openai.OpenAI(api_key=GROQ_API_KEY,
                              base_url="https://api.groq.com/openai/v1")
     except Exception:
+        # Client cloud indisponible = plus de transcription : tracer.
+        journaliser("_init_cloud_client: création du client Groq impossible")
         return None
 
 
@@ -797,6 +810,8 @@ def _charger_modele_local():
     try:
         return WhisperModel(chemin_modele(), device=DEVICE, compute_type=COMPUTE_TYPE)
     except Exception:
+        # Filet hors-ligne mort alors que le modèle est censé être présent.
+        journaliser("_charger_modele_local: chargement Whisper local impossible")
         return None
 
 
@@ -1188,6 +1203,7 @@ class Overlay:
             try:
                 etat["resume"] = groq_summarize(transcript, GROQ_API_KEY)
             except Exception:
+                journaliser("resume tk worker: groq_summarize a levé")
                 etat["resume"] = None
             etat["done"] = True
 
@@ -1502,7 +1518,9 @@ class Overlay:
         try:
             storage.ecrire_docx(chemin, infos, now, resume, self.entries, annexes=annexes)
         except Exception:
-            # Fallback .txt (ne jamais perdre la transcription).
+            # Fallback .txt (ne jamais perdre la transcription) — mais la
+            # cause de l'échec docx doit rester visible pour l'éditeur.
+            journaliser("_enregistrer: ecrire_docx a échoué, repli .txt")
             chemin_txt = re.sub(r"\.docx$", ".txt", chemin, flags=re.IGNORECASE)
             if not chemin_txt.lower().endswith(".txt"):
                 chemin_txt += ".txt"
@@ -1514,6 +1532,8 @@ class Overlay:
                     "La transcription a été sauvegardée en texte brut :\n"
                     + chemin_txt)
             except Exception:
+                # Échec TOTAL de sauvegarde (docx ET txt) : le pire cas.
+                journaliser("_enregistrer: échec docx PUIS txt — transcription non sauvée")
                 message_simple(
                     "Enregistrement impossible",
                     "Le fichier n'a pas pu être enregistré à cet endroit.\n\n"
@@ -1528,7 +1548,7 @@ class Overlay:
             cfg["dossier_sauvegarde"] = dossier
             sauver_config(cfg)
         except Exception:
-            pass
+            pass   # mémorisation du dernier dossier : confort, jamais bloquant
         return True
 
 
@@ -1701,6 +1721,7 @@ def _dl_update(url):
             _download_state["update"]["downloaded"] = _download_state["update"]["total"]
             _download_state["update"]["speed"]      = 0.0
     except Exception as exc:
+        journaliser("_dl_update: téléchargement EchoSetup.exe interrompu")
         with _download_lock:
             _download_state["update"]["error"] = (
                 "Téléchargement de la mise à jour interrompu. "
@@ -2142,7 +2163,9 @@ class Api:
             cfg["demo_faite"] = True
             sauver_config(cfg)
         except Exception:
-            pass
+            # Sans ce flag, la démo serait re-proposée : gênant, pas grave —
+            # mais la cause mérite d'être visible.
+            journaliser("_finir_demo: écriture des flags démo impossible")
 
     def suggerer_nom_patient(self):
         """Suggestion du nom entendu dans la conversation courante (démo,
@@ -2153,6 +2176,8 @@ class Api:
         try:
             return correction.detecter_nom_patient(entries)
         except Exception:
+            # Suggestion de confort : son absence est tolérée, pas son silence.
+            journaliser("suggerer_nom_patient: détection impossible")
             return None
 
     def supprimer_demo(self):
@@ -2443,11 +2468,43 @@ class Api:
 
     # ===== AUTH / LICENCE ====================================================
 
-    def auth_inscription(self, nom, email, password, specialty=""):
-        """Inscrit un nouveau médecin. Stocke cle_licence et infos dans config."""
+    # ---- Vérification d'email (inscription 2 étapes + mot de passe oublié) --
+
+    def demander_code(self, email, type_code):
+        """Demande l'envoi d'un code à 6 chiffres ('inscription' ou 'reset').
+        Remonte le VRAI message serveur (email_pris, anti-abus…)."""
+        res = _appel_api("demander-code", {"email": email, "type": type_code})
+        if not res:
+            return {"ok": False, "error": _message_erreur_api()}
+        return res
+
+    def verifier_code(self, email, code, type_code):
+        """Vérifie le code reçu par email → {ok, jeton_verification} ou le
+        message serveur exact (Code incorrect / expiré / trop de tentatives)."""
+        res = _appel_api("verifier-code",
+                         {"email": email, "code": code, "type": type_code})
+        if not res:
+            return {"ok": False, "error": _message_erreur_api()}
+        return res
+
+    def reinitialiser_mot_de_passe(self, email, jeton, nouveau_mdp):
+        """Change le mot de passe après vérification email (jeton 'reset')."""
+        res = _appel_api("reinitialiser-mot-de-passe", {
+            "email": email, "jeton_verification": jeton,
+            "nouveau_mot_de_passe": nouveau_mdp,
+        })
+        if not res:
+            return {"ok": False, "error": _message_erreur_api()}
+        return res
+
+    def auth_inscription(self, nom, email, password, specialty="",
+                         jeton_verification=""):
+        """Inscrit un nouveau médecin (email préalablement vérifié par jeton).
+        Stocke cle_licence et infos dans config."""
         res = _appel_api("inscription", {
             "nom": nom, "email": email,
             "mot_de_passe": password, "specialite": specialty,
+            "jeton_verification": jeton_verification,
         })
         if not res:
             return {"ok": False, "error": _message_erreur_api()}
@@ -3022,6 +3079,7 @@ class Api:
                                     annexes=getattr(self, "_saved_annexes", []) or [])
         except Exception:
             _caplog.error("_extraction_cr_worker: %s", traceback.format_exc())
+            journaliser("_extraction_cr_worker: extraction du CR échouée (cid=%s)" % cid)
             try:
                 storage.maj_consultation_cr(chemin_consultations(), cid,
                                             cr_elements=elements_vides())
@@ -3676,6 +3734,9 @@ def _safe_js(win, code):
 
 
 def main():
+    # Toute exception NON attrapée (main + threads) part dans
+    # %APPDATA%\Echo\erreurs.log — plus aucune panne invisible.
+    installer_hooks()
     if "--tk" in sys.argv:
         _main_tk()
     else:

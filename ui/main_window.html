@@ -99,7 +99,7 @@
             </div>
           </div>
           <div id="signup-banner" class="hidden auth-banner"></div>
-          <button class="btn btn-primary" id="btn-signup" style="width:100%;padding:11px;">Créer mon compte</button>
+          <button class="btn btn-primary" id="btn-signup" style="width:100%;padding:11px;">Continuer →</button>
         </div>
         <!-- Formulaire connexion -->
         <div id="pane-login" class="auth-form hidden">
@@ -113,6 +113,64 @@
           </div>
           <div id="login-banner" class="hidden auth-banner"></div>
           <button class="btn btn-primary" id="btn-login" style="width:100%;padding:11px;">Se connecter</button>
+          <button type="button" class="auth-link" id="link-forgot">Mot de passe oublié ?</button>
+        </div>
+
+        <!-- Inscription, étape 2 : code de vérification reçu par email -->
+        <div id="pane-code" class="auth-form hidden">
+          <div class="auth-step-title">Vérifiez votre email</div>
+          <div class="auth-step-sub">Un code à 6 chiffres a été envoyé à
+            <strong id="code-email-label"></strong>. Saisissez-le.</div>
+          <div class="field">
+            <input type="text" id="code-input" class="code-input" inputmode="numeric"
+                   maxlength="6" placeholder="••••••" autocomplete="one-time-code">
+          </div>
+          <div id="code-banner" class="hidden auth-banner"></div>
+          <button class="btn btn-primary" id="btn-verify-code" style="width:100%;padding:11px;">
+            Vérifier et créer mon compte
+          </button>
+          <button type="button" class="auth-link" id="link-resend">Renvoyer le code</button>
+          <button type="button" class="auth-link" id="link-edit-email">← Modifier mon email</button>
+        </div>
+
+        <!-- Mot de passe oublié : email → code → nouveau mot de passe -->
+        <div id="pane-reset" class="auth-form hidden">
+          <div class="auth-step-title">Mot de passe oublié</div>
+
+          <div id="reset-step-email">
+            <div class="auth-step-sub">Saisissez l'email de votre compte : un code de
+              vérification vous sera envoyé.</div>
+            <div class="field">
+              <input type="text" id="reset-email" placeholder="dupont@clinique.fr" autocomplete="email">
+            </div>
+            <button class="btn btn-primary" id="btn-reset-send" style="width:100%;padding:11px;">Envoyer le code</button>
+          </div>
+
+          <div id="reset-step-code" class="hidden">
+            <div class="auth-step-sub" id="reset-code-sub"></div>
+            <div class="field">
+              <input type="text" id="reset-code-input" class="code-input" inputmode="numeric"
+                     maxlength="6" placeholder="••••••" autocomplete="one-time-code">
+            </div>
+            <button class="btn btn-primary" id="btn-reset-verify" style="width:100%;padding:11px;">Vérifier le code</button>
+            <button type="button" class="auth-link" id="link-reset-resend">Renvoyer le code</button>
+          </div>
+
+          <div id="reset-step-password" class="hidden">
+            <div class="auth-step-sub">Email vérifié — choisissez votre nouveau mot de passe.</div>
+            <div class="field">
+              <label class="field-label" for="reset-pw1">Nouveau mot de passe</label>
+              <input type="password" id="reset-pw1" placeholder="••••••••" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <label class="field-label" for="reset-pw2">Confirmation</label>
+              <input type="password" id="reset-pw2" placeholder="••••••••" autocomplete="new-password">
+            </div>
+            <button class="btn btn-primary" id="btn-reset-apply" style="width:100%;padding:11px;">Modifier le mot de passe</button>
+          </div>
+
+          <div id="reset-banner" class="hidden auth-banner"></div>
+          <button type="button" class="auth-link" id="link-reset-back">← Retour à la connexion</button>
         </div>
       </div>
     </div>
@@ -912,12 +970,16 @@ function setNavAuth(connecte) {
 
 function resetAuthForm() {
   ['auth-name','auth-email','auth-password','auth-specialty',
-   'login-email','login-password'].forEach(id => {
+   'login-email','login-password',
+   'code-input','reset-email','reset-code-input','reset-pw1','reset-pw2'].forEach(id => {
     const el = $(id); if (el) el.value = '';
   });
-  ['signup-banner','login-banner'].forEach(id => {
+  ['signup-banner','login-banner','code-banner','reset-banner'].forEach(id => {
     const el = $(id); if (el) { el.textContent = ''; el.classList.add('hidden'); }
   });
+  _signupData = null;
+  _resetData = null;
+  if (typeof montrerPaneAuth === 'function') montrerPaneAuth('pane-signup');
   if (typeof spClose === 'function') spClose();
 }
 
@@ -1049,13 +1111,20 @@ onReady(async () => {
 /* ------------------------------------------------------------------ */
 
 // Onglets
+/* Affiche un seul panneau auth (les onglets ne pilotent que signup/login ;
+   code et reset sont des étapes hors onglets). */
+function montrerPaneAuth(nom) {
+  ['pane-signup', 'pane-login', 'pane-code', 'pane-reset'].forEach(p =>
+    $(p).classList.toggle('hidden', p !== nom));
+  const dansOnglets = (nom === 'pane-signup' || nom === 'pane-login');
+  document.querySelector('.auth-tabs').classList.toggle('hidden', !dansOnglets);
+  $('tab-signup').classList.toggle('active', nom === 'pane-signup');
+  $('tab-login').classList.toggle('active', nom === 'pane-login');
+}
+
 ['tab-signup','tab-login'].forEach(id => {
   $(id).addEventListener('click', () => {
-    const isSignup = id === 'tab-signup';
-    $('tab-signup').classList.toggle('active', isSignup);
-    $('tab-login').classList.toggle('active', !isSignup);
-    $('pane-signup').classList.toggle('hidden', !isSignup);
-    $('pane-login').classList.toggle('hidden', isSignup);
+    montrerPaneAuth(id === 'tab-signup' ? 'pane-signup' : 'pane-login');
   });
 });
 
@@ -1129,6 +1198,25 @@ const _authSpecialtyCombo = setupSpecialtyCombo('auth-specialty', 'auth-specialt
 setupSpecialtyCombo('set-specialty', 'set-specialty-list');
 function spClose() { _authSpecialtyCombo.close(); }
 
+/* ── Inscription en 2 étapes : formulaire → code email → compte ── */
+
+let _signupData = null;     // {nom, email, password, specialty} entre les étapes
+
+/* Entrée dans l'app après création du compte (ou connexion auto). */
+async function entrerApresAuth() {
+  licenceValide = true;
+  const state = await api('get_app_state');
+  if (state && state.onboarding_done) {
+    if (state) setDoctorIdentity(state.doctor_name || '', state.specialty || '');
+    await loadHome();
+    navigate('home');
+  } else {
+    await ouvrirBienvenue();        // nom affiché (jamais redemandé), sidebar à jour
+  }
+  if (state && state.en_essai) showTrialBanner(state.jours_restants);
+}
+
+/* Étape 1 : valider le formulaire, demander le code, passer à l'étape 2. */
 $('btn-signup').addEventListener('click', async () => {
   const nom       = $('auth-name').value.trim();
   const email     = $('auth-email').value.trim();
@@ -1139,28 +1227,225 @@ $('btn-signup').addEventListener('click', async () => {
     return;
   }
   $('btn-signup').disabled = true;
-  $('btn-signup').textContent = 'Création…';
-  const res = await api('auth_inscription', nom, email, password, specialty);
+  $('btn-signup').textContent = 'Envoi du code…';
+  const res = await api('demander_code', email, 'inscription');
   $('btn-signup').disabled = false;
-  $('btn-signup').textContent = 'Créer mon compte';
+  $('btn-signup').textContent = 'Continuer →';
   if (!res || !res.ok) {
     // Email déjà pris : basculer vers « Se connecter », email prérempli —
     // le médecin n'a plus qu'à saisir son mot de passe.
     if (res && res.email_pris) {
-      $('tab-login').click();
+      montrerPaneAuth('pane-login');
       $('login-email').value = email;
       $('login-password').focus();
-      authBanner('login-banner', res.error, true);
+      authBanner('login-banner', (res.error || res.erreur) + ' Connectez-vous.', true);
       return;
     }
-    authBanner('signup-banner', (res && res.error) || 'Impossible de joindre le serveur, réessayez.', true);
+    authBanner('signup-banner',
+      (res && (res.error || res.erreur)) || 'Impossible de joindre le serveur, réessayez.', true);
     return;
   }
-  licenceValide = true;
-  // Re-lire l'état pour avoir jours_restants à jour depuis config.json
-  const state = await api('get_app_state');
-  await ouvrirBienvenue();          // nom affiché (jamais redemandé), sidebar à jour
-  if (state && state.en_essai) showTrialBanner(state.jours_restants);
+  _signupData = { nom, email, password, specialty };
+  $('code-email-label').textContent = email;
+  $('code-input').value = '';
+  $('code-banner').classList.add('hidden');
+  montrerPaneAuth('pane-code');
+  $('code-input').focus();
+  demarrerCompteARebours('link-resend');
+});
+
+/* « Renvoyer le code » : grisé 30 s avec décompte, puis actif. */
+const _renvoiTimers = {};
+function demarrerCompteARebours(idLien) {
+  const lien = $(idLien);
+  const libelle = 'Renvoyer le code';
+  clearInterval(_renvoiTimers[idLien]);
+  let reste = 30;
+  lien.disabled = true;
+  lien.textContent = libelle + ' (' + reste + ' s)';
+  _renvoiTimers[idLien] = setInterval(() => {
+    reste--;
+    if (reste <= 0) {
+      clearInterval(_renvoiTimers[idLien]);
+      lien.disabled = false;
+      lien.textContent = libelle;
+    } else {
+      lien.textContent = libelle + ' (' + reste + ' s)';
+    }
+  }, 1000);
+}
+
+$('link-resend').addEventListener('click', async () => {
+  if (!_signupData) return;
+  const res = await api('demander_code', _signupData.email, 'inscription');
+  if (res && res.ok) {
+    authBanner('code-banner', 'Un nouveau code a été envoyé.', false);
+    demarrerCompteARebours('link-resend');
+  } else {
+    authBanner('code-banner',
+      (res && (res.error || res.erreur)) || 'Envoi impossible, réessayez.', true);
+  }
+});
+
+$('link-edit-email').addEventListener('click', () => {
+  montrerPaneAuth('pane-signup');
+  $('auth-email').focus();
+});
+
+/* Étape 2 : vérifier le code → jeton → créer le compte → entrer. */
+$('btn-verify-code').addEventListener('click', async () => {
+  const code = $('code-input').value.trim();
+  if (!/^\d{6}$/.test(code)) {
+    authBanner('code-banner', 'Saisissez le code à 6 chiffres reçu par email.', true);
+    return;
+  }
+  if (!_signupData) { montrerPaneAuth('pane-signup'); return; }
+  const btn = $('btn-verify-code');
+  btn.disabled = true; btn.textContent = 'Vérification…';
+  const v = await api('verifier_code', _signupData.email, code, 'inscription');
+  if (!v || !v.ok) {
+    btn.disabled = false; btn.textContent = 'Vérifier et créer mon compte';
+    // Messages serveur affichés tels quels : incorrect / expiré / tentatives.
+    authBanner('code-banner',
+      (v && (v.error || v.erreur)) || 'Vérification impossible, réessayez.', true);
+    return;
+  }
+  btn.textContent = 'Création du compte…';
+  const d = _signupData;
+  const res = await api('auth_inscription', d.nom, d.email, d.password,
+                        d.specialty, v.jeton_verification);
+  btn.disabled = false; btn.textContent = 'Vérifier et créer mon compte';
+  if (!res || !res.ok) {
+    authBanner('code-banner',
+      (res && (res.error || res.erreur)) || 'Création du compte impossible.', true);
+    return;
+  }
+  _signupData = null;
+  await entrerApresAuth();
+});
+$('code-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('btn-verify-code').click();
+});
+
+/* ── Mot de passe oublié : email → code → nouveau mot de passe ── */
+
+let _resetData = null;      // {email, jeton}
+
+function montrerEtapeReset(nom) {
+  ['reset-step-email', 'reset-step-code', 'reset-step-password'].forEach(id =>
+    $(id).classList.toggle('hidden', id !== nom));
+  $('reset-banner').classList.add('hidden');
+}
+
+$('link-forgot').addEventListener('click', () => {
+  _resetData = null;
+  $('reset-email').value = $('login-email').value.trim();
+  montrerPaneAuth('pane-reset');
+  montrerEtapeReset('reset-step-email');
+  $('reset-email').focus();
+});
+
+$('link-reset-back').addEventListener('click', () => {
+  _resetData = null;
+  montrerPaneAuth('pane-login');
+});
+
+$('btn-reset-send').addEventListener('click', async () => {
+  const email = $('reset-email').value.trim();
+  if (!email) {
+    authBanner('reset-banner', 'Saisissez votre email.', true);
+    return;
+  }
+  const btn = $('btn-reset-send');
+  btn.disabled = true; btn.textContent = 'Envoi…';
+  const res = await api('demander_code', email, 'reset');
+  btn.disabled = false; btn.textContent = 'Envoyer le code';
+  if (!res || !res.ok) {
+    // Anti-abus ou réseau : message serveur. (Un email inconnu répond
+    // ok:true côté serveur — jamais révélé ici.)
+    authBanner('reset-banner',
+      (res && (res.error || res.erreur)) || 'Envoi impossible, réessayez.', true);
+    return;
+  }
+  _resetData = { email, jeton: null };
+  // Formulation NEUTRE : ne jamais révéler si un compte existe.
+  $('reset-code-sub').innerHTML = 'Si un compte existe avec <strong>' +
+    escapeHtml(email) + '</strong>, un code a été envoyé. Saisissez-le.';
+  $('reset-code-input').value = '';
+  montrerEtapeReset('reset-step-code');
+  $('reset-code-input').focus();
+  demarrerCompteARebours('link-reset-resend');
+});
+
+$('link-reset-resend').addEventListener('click', async () => {
+  if (!_resetData) return;
+  const res = await api('demander_code', _resetData.email, 'reset');
+  if (res && res.ok) {
+    authBanner('reset-banner', 'Si un compte existe, un nouveau code a été envoyé.', false);
+    demarrerCompteARebours('link-reset-resend');
+  } else {
+    authBanner('reset-banner',
+      (res && (res.error || res.erreur)) || 'Envoi impossible, réessayez.', true);
+  }
+});
+
+$('btn-reset-verify').addEventListener('click', async () => {
+  const code = $('reset-code-input').value.trim();
+  if (!/^\d{6}$/.test(code)) {
+    authBanner('reset-banner', 'Saisissez le code à 6 chiffres reçu par email.', true);
+    return;
+  }
+  if (!_resetData) { montrerEtapeReset('reset-step-email'); return; }
+  const btn = $('btn-reset-verify');
+  btn.disabled = true; btn.textContent = 'Vérification…';
+  const v = await api('verifier_code', _resetData.email, code, 'reset');
+  btn.disabled = false; btn.textContent = 'Vérifier le code';
+  if (!v || !v.ok) {
+    authBanner('reset-banner',
+      (v && (v.error || v.erreur)) || 'Vérification impossible, réessayez.', true);
+    return;
+  }
+  _resetData.jeton = v.jeton_verification;
+  montrerEtapeReset('reset-step-password');
+  $('reset-pw1').focus();
+});
+$('reset-code-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('btn-reset-verify').click();
+});
+
+$('btn-reset-apply').addEventListener('click', async () => {
+  const pw1 = $('reset-pw1').value, pw2 = $('reset-pw2').value;
+  if (!pw1) { authBanner('reset-banner', 'Saisissez un nouveau mot de passe.', true); return; }
+  if (pw1 !== pw2) {
+    authBanner('reset-banner', 'Les deux mots de passe ne correspondent pas.', true);
+    return;
+  }
+  if (!_resetData || !_resetData.jeton) { montrerEtapeReset('reset-step-email'); return; }
+  const btn = $('btn-reset-apply');
+  btn.disabled = true; btn.textContent = 'Modification…';
+  const res = await api('reinitialiser_mot_de_passe',
+                        _resetData.email, _resetData.jeton, pw1);
+  if (!res || !res.ok) {
+    btn.disabled = false; btn.textContent = 'Modifier le mot de passe';
+    authBanner('reset-banner',
+      (res && (res.error || res.erreur)) || 'Modification impossible, réessayez.', true);
+    return;
+  }
+  // Mot de passe modifié → connexion automatique → accueil.
+  btn.textContent = 'Connexion…';
+  const login = await api('auth_connexion', _resetData.email, pw1);
+  btn.disabled = false; btn.textContent = 'Modifier le mot de passe';
+  _resetData = null;
+  if (login && login.ok && !login.expired) {
+    await entrerApresAuth();
+  } else if (login && login.expired) {
+    licenceValide = false;
+    navigate('expired');
+  } else {
+    // Mot de passe changé mais reconnexion ratée (réseau) : retour connexion.
+    montrerPaneAuth('pane-login');
+    authBanner('login-banner', 'Mot de passe modifié — connectez-vous.', false);
+  }
 });
 
 $('btn-login').addEventListener('click', async () => {

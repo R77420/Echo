@@ -16,6 +16,8 @@ import re
 import time
 import unicodedata
 
+from journal_erreurs import journaliser
+
 # Libellé accentué écrit dans le fichier (l'interne reste sans accent).
 LOCUTEUR_FICHIER = {"Medecin": "Médecin", "Patient": "Patient"}
 
@@ -32,7 +34,12 @@ def charger_consultations(chemin):
         with open(chemin, encoding="utf-8") as f:
             d = json.load(f)
         return d if isinstance(d, list) else []
+    except FileNotFoundError:
+        return []          # premier lancement : état normal, rien à journaliser
     except Exception:
+        # JSON corrompu / fichier illisible : l'historique « disparaîtrait »
+        # sans explication — à journaliser absolument.
+        journaliser("charger_consultations: %s illisible" % chemin)
         return []
 
 
@@ -45,7 +52,9 @@ def ajouter_consultation(chemin, record):
         with open(chemin, "w", encoding="utf-8") as f:
             json.dump(consultations, f, ensure_ascii=False, indent=2)
     except Exception:
-        pass
+        # PERTE d'un enregistrement de consultation : la panne la plus grave
+        # possible pour un médecin — toujours tracée.
+        journaliser("ajouter_consultation: écriture impossible dans %s" % chemin)
 
 
 def _lire_liste(chemin):
@@ -175,7 +184,10 @@ def charger_patients_manuels(chemin):
         with open(chemin, encoding="utf-8") as f:
             d = json.load(f)
         return d if isinstance(d, list) else []
+    except FileNotFoundError:
+        return []          # aucun patient manuel créé : état normal
     except Exception:
+        journaliser("charger_patients_manuels: %s illisible" % chemin)
         return []
 
 

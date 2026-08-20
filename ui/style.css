@@ -1950,3 +1950,25 @@ input[type="range"] {
 }
 .demo-script-titre { font-weight: 600; margin-bottom: 8px; }
 .demo-script-ligne { margin: 3px 0; font-style: italic; opacity: 0.95; }
+
+/* ── Vérification email (inscription 2 étapes + mot de passe oublié) ── */
+.auth-step-title {
+  font-family: 'Fraunces', Georgia, serif; font-size: 17px; font-weight: 600;
+  color: var(--txt-primary); margin-bottom: 4px;
+}
+.auth-step-sub {
+  font-size: 13px; line-height: 1.5; color: var(--txt-secondary);
+  margin-bottom: 12px;
+}
+/* Champ code : gros, centré, espacé — lisible d'un coup d'œil. */
+.auth-form input.code-input {
+  width: 100%; text-align: center;
+  font-size: 26px; letter-spacing: 10px; font-variant-numeric: tabular-nums;
+  padding: 12px 8px;
+}
+.auth-link {
+  background: none; border: none; cursor: pointer; padding: 8px 4px 0;
+  font-size: 12.5px; color: var(--accent); text-align: center; width: 100%;
+}
+.auth-link:hover { text-decoration: underline; }
+.auth-link:disabled { color: var(--txt-disabled); cursor: default; text-decoration: none; }

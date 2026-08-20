@@ -51,6 +51,7 @@ hiddenimports += [
     'storage',
     'resume',
     'audio',
+    'journal_erreurs',
 ]
 
 
