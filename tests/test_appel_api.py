@@ -63,3 +63,56 @@ def test_inscription_message_precis(monkeypatch):
     assert res["ok"] is False
     assert res["error"] != "Erreur réseau. Vérifiez votre connexion."
     assert "injoignable" in res["error"]
+
+
+def test_reparation_mojibake():
+    mojibake = "Email dÃ©jÃ  utilisÃ©."   # « dÃ©jÃ  » double-encodé
+    assert tc._reparer_utf8(mojibake) == "Email déjà utilisé."
+    sain = "Email déjà utilisé."
+    assert tc._reparer_utf8(sain) == sain                     # sain : inchangé
+    assert tc._reparer_utf8("") == ""
+    assert tc._reparer_utf8(None) is None
+
+
+def test_email_deja_pris_bascule(monkeypatch):
+    """Email pris -> message honnête + flag email_pris pour la bascule JS,
+    même si le serveur répond en mojibake."""
+    corps = ("Email dÃ©jÃ  utilisÃ©."
+             ).encode("utf-8")
+    def f(req, timeout=0):
+        raise _HTTP(400, b'{"ok":false,"error":"' + corps.replace(b'"', b'') + b'"}')
+    _avec(monkeypatch, f)
+    res = tc.Api().auth_inscription("Dr X", "x@y.fr", "pw")
+    assert res["ok"] is False
+    assert res.get("email_pris") is True
+    assert res["error"] == ("Un compte existe déjà avec cet email. "
+                            "Connectez-vous plutôt.")
+
+
+def test_mot_de_passe_invalide_message_distinct(monkeypatch):
+    """Une autre erreur métier garde SON message (pas de bascule)."""
+    corps = "Mot de passe trop court (8 caractères minimum).".encode("utf-8")
+    def f(req, timeout=0):
+        raise _HTTP(400, b'{"ok":false,"error":"' + corps + b'"}')
+    _avec(monkeypatch, f)
+    res = tc.Api().auth_inscription("Dr X", "x@y.fr", "pw")
+    assert res["ok"] is False
+    assert "email_pris" not in res
+    assert res["error"] == "Mot de passe trop court (8 caractères minimum)."
+
+
+def test_cle_erreur_francaise_normalisee(monkeypatch):
+    """La VRAIE reponse du serveur ({ok:false,erreur:...}, HTTP 200) est
+    normalisee : error rempli depuis erreur -> plus jamais le message
+    generique alors que le serveur a explique la cause."""
+    import io
+    class _Resp:
+        status = 200
+        def read(self): return b'{"ok":false,"erreur":"Email d\xc3\xa9j\xc3\xa0 utilis\xc3\xa9"}'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    _avec(monkeypatch, lambda req, timeout=0: _Resp())
+    res = tc.Api().auth_inscription("Dr X", "x@y.fr", "pw")
+    assert res["ok"] is False
+    assert res.get("email_pris") is True
+    assert "existe d" in res["error"] and "Connectez-vous" in res["error"]

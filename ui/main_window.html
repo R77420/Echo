@@ -1144,7 +1144,16 @@ $('btn-signup').addEventListener('click', async () => {
   $('btn-signup').disabled = false;
   $('btn-signup').textContent = 'Créer mon compte';
   if (!res || !res.ok) {
-    authBanner('signup-banner', (res && res.error) || 'Erreur réseau, réessayez.', true);
+    // Email déjà pris : basculer vers « Se connecter », email prérempli —
+    // le médecin n'a plus qu'à saisir son mot de passe.
+    if (res && res.email_pris) {
+      $('tab-login').click();
+      $('login-email').value = email;
+      $('login-password').focus();
+      authBanner('login-banner', res.error, true);
+      return;
+    }
+    authBanner('signup-banner', (res && res.error) || 'Impossible de joindre le serveur, réessayez.', true);
     return;
   }
   licenceValide = true;

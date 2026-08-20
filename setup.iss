@@ -3,7 +3,7 @@
 ; comptes-rendus et donnees patient stockes en local sur le poste.
 
 #define MyAppName "Écho"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.2.1"
 #define MyAppPublisher "MOUSSA Rayane"
 #define MyAppExeName "Echo.exe"
 ; Dossier source du build onedir (surchargé via ISCC /DSrcDir=...).

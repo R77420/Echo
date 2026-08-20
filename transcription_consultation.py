@@ -97,7 +97,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "2.2.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "2.2.1"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
@@ -1810,7 +1810,7 @@ def _appel_api(endpoint, payload, timeout=10):
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return _normaliser_reponse(json.loads(resp.read().decode("utf-8")))
     except urllib.error.HTTPError as e:
         # Le serveur a répondu : ce N'EST PAS une erreur réseau. On tente
         # de rendre le JSON (l'API renvoie souvent {ok:false,error:...}
@@ -1821,6 +1821,7 @@ def _appel_api(endpoint, payload, timeout=10):
             d = json.loads(corps)
             if isinstance(d, dict):
                 d.setdefault("ok", False)
+                d = _normaliser_reponse(d)
                 d.setdefault("error", "Le serveur a répondu une erreur (HTTP %d)." % e.code)
                 _derniere_erreur_api = {"type": "http", "detail": "HTTP %d" % e.code}
                 return d
@@ -1845,6 +1846,36 @@ def _appel_api(endpoint, payload, timeout=10):
     except Exception as e:
         _derniere_erreur_api = {"type": "reseau", "detail": str(e)}
         return None
+
+
+def _normaliser_reponse(d):
+    """Uniformise une réponse API : l'Edge Function répond avec la clé
+    FRANÇAISE `erreur` — le client lisait `error` et affichait donc toujours
+    son message générique (« Erreur réseau » / « Inscription échouée »),
+    la cause des jours de fausse chasse au réseau. On expose les deux,
+    encodage réparé."""
+    if not isinstance(d, dict):
+        return d
+    if "error" not in d and isinstance(d.get("erreur"), str):
+        d["error"] = d["erreur"]
+    for cle in ("error", "erreur"):
+        if isinstance(d.get(cle), str):
+            d[cle] = _reparer_utf8(d[cle])
+    return d
+
+
+def _reparer_utf8(texte):
+    """Répare le mojibake « Email dÃ©jÃ  utilisÃ© » : l'Edge Function encode
+    parfois l'UTF-8 deux fois. Si le texte contient des séquences typiques
+    (Ã©, Ã¨…), on le ré-interprète latin-1 → UTF-8 ; sinon inchangé."""
+    if not isinstance(texte, str) or "Ã" not in texte:
+        return texte
+    try:
+        repare = texte.encode("latin-1").decode("utf-8")
+        # Ne garder la réparation que si elle a vraiment réduit le mojibake.
+        return repare if repare.count("Ã") < texte.count("Ã") else texte
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return texte
 
 
 def _message_erreur_api():
@@ -2391,7 +2422,16 @@ class Api:
         if not res:
             return {"ok": False, "error": _message_erreur_api()}
         if not res.get("ok"):
-            return {"ok": False, "error": res.get("error", "Inscription échouée.")}
+            erreur = res.get("error") or "Inscription refusée par le serveur."
+            # Email déjà pris : message honnête + bascule vers la connexion
+            # (le flag email_pris est lu par le JS).
+            e_norm = erreur.lower()
+            if "existe" in e_norm or ("déjà" in e_norm and
+                                      ("utilis" in e_norm or "pris" in e_norm)):
+                return {"ok": False, "email_pris": True,
+                        "error": "Un compte existe déjà avec cet email. "
+                                 "Connectez-vous plutôt."}
+            return {"ok": False, "error": erreur}
         cfg = charger_config()
         cfg["cle_licence"]   = res.get("cle_licence", "")
         cfg["medecin_id"]    = res.get("medecin_id", "")
