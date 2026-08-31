@@ -1,8 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:\\Users\\rayou\\OneDrive\\Desktop\\Écho\\realtime-transcription\\ui', 'ui'),
-         ('C:\\Users\\rayou\\OneDrive\\Desktop\\Écho\\realtime-transcription\\echo.ico', '.')]
+# Chemins RELATIFS au .spec (SPECPATH, fourni par PyInstaller) : le projet
+# ne dépend plus du nom ni de l'emplacement de son dossier parent.
+import os
+datas = [(os.path.join(SPECPATH, 'ui'), 'ui'),
+         (os.path.join(SPECPATH, 'echo.ico'), '.')]
 binaries = []
 # Barre système : pystray charge son backend Windows dynamiquement (win32).
 hiddenimports = ['pystray', 'pystray._win32', 'PIL', 'PIL.Image', 'PIL.ImageDraw',
@@ -56,7 +59,7 @@ hiddenimports += [
 
 
 a = Analysis(
-    ['C:\\Users\\rayou\\OneDrive\\Desktop\\Écho\\realtime-transcription\\transcription_consultation.py'],
+    [os.path.join(SPECPATH, 'transcription_consultation.py')],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -86,7 +89,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='C:\\Users\\rayou\\OneDrive\\Desktop\\Écho\\realtime-transcription\\echo.ico',
+    icon=os.path.join(SPECPATH, 'echo.ico'),
 )
 coll = COLLECT(
     exe,

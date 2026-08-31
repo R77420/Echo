@@ -32,6 +32,28 @@ SELECTION DU PERIPHERIQUE
 ------------------------------------------------------------------------------
 """
 
+# ── Chronomètre de démarrage ──────────────────────────────────────────────
+# Mesure chaque grande étape (imports lourds, init Api, licence, fenêtre) et
+# écrit %APPDATA%\Echo\demarrage.log. Coût quasi nul, laissé en permanence.
+import time as _time_boot
+_BOOT_T0 = _time_boot.perf_counter()
+_BOOT_PREC = _BOOT_T0
+
+def _chrono(etape):
+    global _BOOT_PREC
+    t = _time_boot.perf_counter()
+    try:
+        import os as _os
+        d = _os.path.join(_os.environ.get("APPDATA", ""), "Echo")
+        _os.makedirs(d, exist_ok=True)
+        with open(_os.path.join(d, "demarrage.log"), "a", encoding="utf-8") as f:
+            f.write("+%7.3fs (Δ %6.3fs)  %s\n" % (t - _BOOT_T0, t - _BOOT_PREC, etape))
+    except Exception:
+        pass
+    _BOOT_PREC = t
+
+_chrono("=== démarrage (python lancé) ===")
+
 import ctypes
 import datetime
 import json
@@ -54,12 +76,19 @@ import socket
 import uuid
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
+_chrono("imports stdlib + tkinter")
 
 import numpy as np
-from faster_whisper import WhisperModel
+_chrono("import numpy")
+# faster_whisper N'EST PAS importé ici : 3,2 s à l'import (ctranslate2 tire
+# transformers) pour un module qui ne sert qu'au fallback HORS-LIGNE.
+# Import différé dans _charger_modele_local() / selftest() — mesuré : c'était
+# 77 % du temps de démarrage. (Le bundle PyInstaller le garde : collect_all
+# dans Echo.spec, indépendant du moment de l'import.)
 
 import storage  # persistance : historique JSON + génération .docx (fonctions pures)
 import demarrage  # lancement au démarrage de Windows (clé de registre HKCU)
+_chrono("import storage + demarrage")
 # Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
 from audio import (
     SAMPLE_RATE, CHANNELS, FRAME_MS, FRAME_SAMPLES, VAD_LEVEL,
@@ -72,6 +101,7 @@ from audio import (
     loopback_par_nom, micro_par_nom,
     rms, garder_si_audible, audio_to_wav_buffer, VADSegmenter,
 )
+_chrono("import audio (soundcard WASAPI + webrtcvad)")
 
 # ----------------------------- DEBUG LOGGING ----------------------------------
 # Activé uniquement si %APPDATA%\Echo\debug_mode existe (flag fichier).
@@ -588,9 +618,11 @@ def chemin_modele():
 # Moteur unique : Groq LLM (~3 s, Llama 70B). Si indisponible → pas de résumé,
 # le compte-rendu reste sauvegardé avec la transcription complète.
 
+_chrono("corps du module (jusqu'à resume/correction)")
 from resume import (groq_summarize, ENTETE_RESUME,
                     extraire_elements_cr, elements_vers_resume, elements_vides)
 import correction
+_chrono("import resume + correction")
 
 
 # ----------------------------- PARAMÈTRES WHISPER ----------------------------
@@ -808,6 +840,7 @@ def _charger_modele_local():
     À n'appeler que si modele_local_present() est vrai (évite tout
     téléchargement HF implicite)."""
     try:
+        from faster_whisper import WhisperModel   # import différé (3,2 s)
         return WhisperModel(chemin_modele(), device=DEVICE, compute_type=COMPUTE_TYPE)
     except Exception:
         # Filet hors-ligne mort alors que le modèle est censé être présent.
@@ -1957,6 +1990,26 @@ def _verifier_licence(cle_licence):
     return result
 
 
+# Mémoïsation du statut licence : au démarrage, get_app_state est appelé par
+# la fenêtre principale ET l'overlay (+ rappels) → 3 appels réseau bloquants
+# de ~0,5 s chacun mesurés. Un seul appel suffit largement par minute.
+_licence_cache = {"t": 0.0, "statut": None}
+_LICENCE_TTL = 60.0          # secondes de validité du cache mémoire
+_licence_refresh_lock = threading.Lock()
+_licence_refresh_actif = False
+
+
+def _verifier_licence_cachee(cle):
+    """Statut licence AVEC cache mémoire (60 s) : au plus un appel réseau."""
+    global _licence_cache
+    if (_licence_cache["statut"] is not None
+            and time.monotonic() - _licence_cache["t"] < _LICENCE_TTL):
+        return _licence_cache["statut"]
+    statut = _verifier_licence(cle)
+    _licence_cache = {"t": time.monotonic(), "statut": statut}
+    return statut
+
+
 # ----------------------------- API PYWEBVIEW ---------------------------------
 
 class Api:
@@ -2413,6 +2466,45 @@ class Api:
 
     # ===== ÉTAT GLOBAL / ONBOARDING ==========================================
 
+    def _rafraichir_licence_fond(self, cle):
+        """Vérifie la licence en ARRIÈRE-PLAN (un seul thread à la fois),
+        persiste le statut en config (dernier connu pour le prochain
+        démarrage) et notifie l'UI si la validité a changé."""
+        global _licence_refresh_actif
+        with _licence_refresh_lock:
+            if _licence_refresh_actif:
+                return
+            _licence_refresh_actif = True
+
+        def worker():
+            global _licence_refresh_actif
+            try:
+                _t = time.perf_counter()
+                statut = _verifier_licence_cachee(cle)
+                _chrono("licence rafraîchie en arrière-plan (%.3fs)"
+                        % (time.perf_counter() - _t))
+                cfg = charger_config()
+                avant = cfg.get("licence_valide_cache", True)
+                cfg["licence_valide_cache"] = bool(statut.get("valide"))
+                cfg["en_essai_cache"] = bool(statut.get("en_essai"))
+                if statut.get("en_essai"):
+                    cfg["jours_restants"] = statut.get("jours_restants", 0)
+                sauver_config(cfg)
+                # Le statut a changé pendant que l'UI tournait sur l'ancien :
+                # prévenir la fenêtre principale (bascule expiré/valide).
+                if bool(statut.get("valide")) != bool(avant):
+                    win = getattr(self, "_main_win", None)
+                    if win is not None:
+                        _safe_js(win, "typeof onLicenceMaj==='function' && onLicenceMaj(%s)"
+                                 % ("true" if statut.get("valide") else "false"))
+            except Exception:
+                journaliser("_rafraichir_licence_fond: échec du rafraîchissement")
+            finally:
+                with _licence_refresh_lock:
+                    _licence_refresh_actif = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def get_app_state(self):
         """Retourne l'état de l'appli : licence, onboarding, nom médecin, etc."""
         cfg = charger_config()
@@ -2424,14 +2516,27 @@ class Api:
         jours_restants  = 0
 
         if cle:
-            statut = _verifier_licence(cle)
+            # JAMAIS d'appel réseau bloquant ici (le pont JS gelait ~0,5 s
+            # par fenêtre au démarrage). Cache mémoire s'il est frais, sinon
+            # dernier statut connu en config (fail-open : une licence valide
+            # en cache laisse travailler même si le backend tarde), et un
+            # rafraîchissement part en arrière-plan — l'UI est notifiée si
+            # le statut change.
+            if (_licence_cache["statut"] is not None
+                    and time.monotonic() - _licence_cache["t"] < _LICENCE_TTL):
+                statut = _licence_cache["statut"]
+                _chrono("get_app_state: licence depuis le cache mémoire")
+            else:
+                statut = {"valide": cfg.get("licence_valide_cache", True),
+                          "en_essai": cfg.get("en_essai_cache", False),
+                          "jours_restants": cfg.get("jours_restants", 0)}
+                self._rafraichir_licence_fond(cle)
+                _chrono("get_app_state: licence depuis la config (refresh en fond)")
             if statut.get("valide"):
                 licence_ok = True
                 if statut.get("en_essai"):
                     en_essai = True
                     jours_restants = statut.get("jours_restants", 0)
-                    cfg["jours_restants"] = jours_restants
-                    sauver_config(cfg)
             else:
                 licence_expired = True
 
@@ -2440,7 +2545,13 @@ class Api:
             "licence_expired":   licence_expired,
             "en_essai":          en_essai,
             "jours_restants":    jours_restants,
-            "onboarding_done":   bool(cfg.get("doctor_name")),
+            # Flag DÉDIÉ posé par complete_onboarding. doctor_name ne peut
+            # plus servir de marqueur : l'inscription le stocke désormais
+            # immédiatement (régression : la visite guidée ne se lançait
+            # plus, le compte neuf paraissait déjà onboardé).
+            # Rétro-compat : les installs d'avant le flag ont "micro" en
+            # config (posé uniquement par complete_onboarding).
+            "onboarding_done":   bool(cfg.get("onboarding_fait")) or "micro" in cfg,
             "doctor_name":       cfg.get("doctor_name", ""),
             "save_folder":       cfg.get("dossier_sauvegarde", ""),
             "gain_patient":      cfg.get("gain_patient", 1.0),
@@ -2463,6 +2574,7 @@ class Api:
             return {"ok": False, "error": "Le nom du médecin est introuvable."}
         cfg["micro"]  = mic_name
         cfg["sortie"] = output_name
+        cfg["onboarding_fait"] = True
         sauver_config(cfg)
         return {"ok": True}
 
@@ -2878,7 +2990,7 @@ class Api:
                 try:
                     cfg = charger_config()
                     cle = cfg.get("cle_licence", "")
-                    ok = _verifier_licence(cle).get("valide", False) if cle else False
+                    ok = _verifier_licence_cachee(cle).get("valide", False) if cle else False
                 except Exception:
                     ok = True   # fail-open : ne pas griser à tort hors ligne
                 etat = "vert" if ok else "gris"
@@ -3622,9 +3734,12 @@ class Api:
 
 def _main_webview():
     """Point d'entrée pywebview — deux fenêtres distinctes."""
+    _chrono("main() atteint")
     import webview
+    _chrono("import webview (pywebview)")
 
     api    = Api()
+    _chrono("init Api")
     ui_dir = ressource("ui")
 
     # Vérification de mise à jour en arrière-plan (non bloquant, silencieux).
@@ -3684,6 +3799,9 @@ def _main_webview():
         return False   # ne jamais fermer via la croix (tray only)
 
     main_win.events.closing += on_main_closing
+    _chrono("fenêtres créées (create_window x2)")
+    # Premier rendu réel de la fenêtre principale.
+    main_win.events.shown += (lambda: _chrono("fenêtre principale AFFICHÉE (premier rendu)"))
 
     # --- Icône de la barre système (best-effort : app OK sans icône) ---
     try:
@@ -3698,6 +3816,7 @@ def _main_webview():
             api._tray = None
     except Exception:
         api._tray = None
+    _chrono("tray démarré (pystray + PIL)")
 
     def on_start():
         api._webview_mod = webview
@@ -3718,6 +3837,7 @@ def _main_webview():
         threading.Thread(target=lambda: (time.sleep(1.0), api._maj_tray()),
                          daemon=True).start()
 
+    _chrono("webview.start() appelé (boucle GUI)")
     webview.start(func=on_start, debug=("--dev" in sys.argv))
     stop_event.set()
     if api._tray:
@@ -3759,6 +3879,7 @@ def selftest():
         models_info = "whisper=%s" % (w_ok,)
         # Charge le modèle Whisper si disponible, sinon valide juste les imports.
         if w_ok:
+            from faster_whisper import WhisperModel   # import différé
             source = chemin_modele()
             model  = WhisperModel(source, device=DEVICE, compute_type=COMPUTE_TYPE)
             segs, _ = model.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32),

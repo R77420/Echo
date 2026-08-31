@@ -2182,13 +2182,15 @@ let _tourIdx = -1;
 let _tourEl  = null;
 
 function proposerVisite() {
-  // Flag posé DÈS la proposition : proposer une fois, puis laisser
-  // tranquille (même si le médecin ferme l'app sans répondre).
-  api('marquer_decouverte', 'visite_faite');
+  // Le flag n'est PAS posé ici : uniquement à la fin de la visite ou sur
+  // « Passer » — jamais à l'inscription ni à la simple proposition.
   show($('tour-proposal'));
 }
 $('tour-start').addEventListener('click', () => { hide($('tour-proposal')); startTour(); });
-$('tour-skip').addEventListener('click', () => hide($('tour-proposal')));
+$('tour-skip').addEventListener('click', () => {
+  hide($('tour-proposal'));
+  api('marquer_decouverte', 'visite_faite');   // choix explicite du médecin
+});
 
 function startTour() {
   _tourIdx = -1;
@@ -2252,6 +2254,9 @@ function finirTour() {
   _tourDespot();
   hide($('tour-bubble'));
   _tourIdx = -1;
+  // Fin de visite (complète, « Passer la visite » ou Échap) : c'est ICI
+  // que la visite compte comme faite.
+  api('marquer_decouverte', 'visite_faite');
 }
 $('tour-next').addEventListener('click', tourSuivant);
 $('tour-pass').addEventListener('click', finirTour);
@@ -2516,6 +2521,19 @@ $('dp-start').addEventListener('click', async () => {
     show(b);
   }
 });
+
+/* Appelé par Python : le statut licence rafraîchi en arrière-plan diffère
+   de celui affiché (l'accueil s'affiche sans attendre le réseau). */
+async function onLicenceMaj(valide) {
+  if (!valide && licenceValide) {
+    licenceValide = false;
+    navigate('expired');
+  } else if (valide && currentView === 'expired') {
+    licenceValide = true;
+    await loadHome();
+    navigate('home');
+  }
+}
 
 /* Appelé par Python (api._main_win.evaluate_js) après fin de consultation */
 async function onConsultationEnded() {
