@@ -127,7 +127,7 @@ _caplog = _setup_debug_logger()
 
 # ----------------------------- PARAMETRES ------------------------------------
 
-APP_VERSION = "2.3.0"   # version courante (mise à jour auto au démarrage)
+APP_VERSION = "2.3.1"   # version courante (mise à jour auto au démarrage)
 GITHUB_REPO = "R77420/Echo"
 
 # Clé API Groq — importée depuis GROQ_KEY.py (gitignored, embarqué au build).
