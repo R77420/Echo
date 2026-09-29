@@ -868,7 +868,19 @@ def filtrer_segment_final(texte, no_speech_prob):
     if no_speech_prob is not None and no_speech_prob > NO_SPEECH_MAX:
         return None
     t = corriger_transcription((texte or "").strip())
-    if not t or est_hallucination_generique(t):
+    if not t:
+        return None
+    if any(p in t.lower() for p in PATTERNS_HALLUCINATION_SOUS_TITRAGE):
+        return None
+    if len(t.split()) == 1:
+        # Un mot seul (« Non. », « Oui. », « Jamais. ») répond souvent à une
+        # question clinique (allergies, tabac, douleur) et change le sens du
+        # compte-rendu : sur l'audio complet, il est gardé dès qu'il contient
+        # une lettre — no_speech_prob (ci-dessus) et la garde énergétique
+        # (appelant) attestent une vraie parole. Le temps réel, lui, continue
+        # de jeter les segments d'un mot (bruit bref sans contexte).
+        return t if re.search(r"[a-zàâäéèêëïîôöùûüç]", t, re.IGNORECASE) else None
+    if est_hallucination_generique(t):
         return None
     if correction.contient_bascule_anglaise(t) or correction._est_charabia(t):
         return None

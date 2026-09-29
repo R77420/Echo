@@ -97,6 +97,44 @@ def test_filtres_finaux_identiques_au_temps_reel():
     assert f("Bonjour docteur, j'ai mal à la gorge.", None) is not None
 
 
+def test_segment_d_un_mot_garde_en_retranscription_finale():
+    """« Non. » / « Oui. » / « Jamais. » = réponses cliniques : gardés sur
+    l'audio complet (no_speech + garde énergétique font foi). Le temps réel
+    reste inchangé (un mot seul y est toujours jeté)."""
+    f = tc.filtrer_segment_final
+    assert f(" Non.", 0.05) == "Non."
+    assert f("Jamais", 0.05) == "Jamais"
+    assert f("Non.", 0.9) is None                 # no_speech_prob prime
+    assert f("...", 0.05) is None                 # ponctuation seule
+    assert f("amara.org", 0.05) is None           # pattern connu, même seul
+    assert tc.est_hallucination_generique("Non.") is True   # temps réel inchangé
+
+
+def test_question_reponse_un_mot_conservee(tmp_path, monkeypatch):
+    """« Vous avez des allergies ? » / « Non. » → les deux segments sont
+    conservés dans la retranscription finale."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    rep = {"segments": [
+        {"start": 0.5, "end": 3.0, "text": " Vous avez des allergies ?", "no_speech_prob": 0.02},
+        {"start": 3.5, "end": 4.5, "text": " Non.", "no_speech_prob": 0.04},
+        {"start": 8.0, "end": 9.0, "text": " Oui.", "no_speech_prob": 0.03},   # dans le silence : inventé
+    ]}
+    monkeypatch.setattr(tc, "_init_cloud_client", lambda: _FauxClient(reponses=[rep]))
+    rng = np.random.default_rng(5)
+    x = (rng.standard_normal(SR * 10) * 0.002).astype(np.float32)
+    x[:SR * 3] += _sinus(freq=180, amp=0.05, duree_s=3.0)
+    x[int(3.5 * SR):int(4.5 * SR)] += _sinus(freq=180, amp=0.05, duree_s=1.0)
+    chemin = str(tmp_path / "qr.wav")
+    enr = rt.EnregistreurWav(chemin)
+    enr.ecrire(x)
+    enr.fermer()
+    api = _api_cabinet()
+    api._lancer_retranscription(chemin)
+    assert api._final_evt.wait(10)
+    assert api._final["status"] == "done"
+    assert [e[2] for e in api._final["entries"]] == ["Vous avez des allergies ?", "Non."]
+
+
 def test_plancher_et_segment_silencieux():
     rng = np.random.default_rng(3)
     x = (rng.standard_normal(SR * 40) * 0.003).astype(np.float32)   # pièce
