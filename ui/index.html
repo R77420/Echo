@@ -213,7 +213,7 @@
   <div class="prog-wrap">
     <div class="spinner"></div>
     <div class="prog-title" id="prog-title">Chargement du modèle de résumé…</div>
-    <div class="prog-sub">Le document est déjà enregistré. Vous pouvez continuer à travailler ; le résumé se prépare.</div>
+    <div class="prog-sub" id="prog-sub">Le document est déjà enregistré. Vous pouvez continuer à travailler ; le résumé se prépare.</div>
   </div>
 </div>
 
@@ -856,8 +856,11 @@ $('ask-resume-yes').addEventListener('click', () => {
   startResumeBackground();
 });
 
+const PROG_SUB_RESUME = 'Le document est déjà enregistré. Vous pouvez continuer à travailler ; le résumé se prépare.';
+
 async function startResumeBackground() {
   $('prog-title').textContent = 'Chargement du modèle de résumé…';
+  $('prog-sub').textContent = PROG_SUB_RESUME;
   show($('modal-progress'));
   await api('generate_resume_async');
   pollResumeStatus();
@@ -971,6 +974,11 @@ async function doInitialSave(annexes) {
     // Annulation de la boîte → revenir à l'appli (ne pas fermer).
     return;
   }
+  // Cabinet : l'audio complet est retranscrit depuis le clic « Terminer »
+  // (en général déjà fini pendant la saisie du patient). On attend sa fin
+  // pour que le .docx et le compte-rendu partent du transcript complet ;
+  // en cas d'échec ou de délai dépassé, Python garde l'aperçu temps réel.
+  if (_consultMode === 'cabinet') await attendreFinalisation();
   // Sauvegarde sans résumé (résumé = '').
   const saveRes = await api('perform_save', fileRes.path, '', annexes);
   if (saveRes && saveRes.ok) {
@@ -983,6 +991,28 @@ async function doInitialSave(annexes) {
     show($('view-main'));
     alert((saveRes && saveRes.error) || "L'enregistrement a échoué. Veuillez réessayer.");
   }
+}
+
+/* Attend la fin de la retranscription finale (cabinet). N'affiche la modale
+   que si elle tourne encore ; délai maximal borné (fail-safe côté Python). */
+const FINALISATION_MAX_MS = 150000;
+
+async function attendreFinalisation() {
+  const debut = Date.now();
+  let affiche = false;
+  while (Date.now() - debut < FINALISATION_MAX_MS) {
+    const s = await api('get_finalisation_status');
+    if (!s || s.status !== 'running') break;
+    if (!affiche) {
+      affiche = true;
+      $('prog-title').textContent = 'Finalisation de la transcription…';
+      $('prog-sub').textContent =
+        "L'enregistrement complet de la consultation est retranscrit pour un compte-rendu plus fidèle. Quelques secondes.";
+      show($('modal-progress'));
+    }
+    await new Promise(r => setTimeout(r, 400));
+  }
+  if (affiche) hide($('modal-progress'));
 }
 
 function nettoyer(s) {

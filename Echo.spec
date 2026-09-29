@@ -55,6 +55,7 @@ hiddenimports += [
     'resume',
     'audio',
     'journal_erreurs',
+    'retranscription',
 ]
 
 

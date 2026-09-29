@@ -88,6 +88,7 @@ _chrono("import numpy")
 
 import storage  # persistance : historique JSON + génération .docx (fonctions pures)
 import demarrage  # lancement au démarrage de Windows (clé de registre HKCU)
+import retranscription  # cabinet : enregistrement continu + retranscription finale
 _chrono("import storage + demarrage")
 # Couche audio (constantes, découverte périphériques, segmentation VAD, helpers).
 from audio import (
@@ -183,6 +184,54 @@ _speaking_now = {"medecin": False, "patient": False, "conversation": False}
 # micro pour rendre un verdict micro en fin de démo (remplace le test 5 s —
 # on ne fait pas relire une phrase au médecin). Activé par Api.set_demo_mode.
 _demo_capture = {"actif": False, "rms": []}
+
+# ---- Enregistrement continu (mode cabinet) ----
+# Le thread de capture « Conversation » pousse chaque frame dans cet
+# enregistreur WAV ; au « Terminer », l'audio complet est retranscrit d'un bloc
+# (cf. retranscription.py). Créé par Api.start(cabinet), fermé par
+# _fermer_enregistrement(). None en télé ou si la création a échoué.
+_enregistreur = None
+_enregistreur_lock = threading.Lock()
+
+
+def _ouvrir_enregistrement():
+    """Crée l'enregistreur WAV temporaire (best-effort : None si échec, la
+    capture temps réel continue sans lui)."""
+    global _enregistreur
+    with _enregistreur_lock:
+        if _enregistreur is not None:      # résidu d'une consultation précédente
+            retranscription.supprimer(_enregistreur.fermer())
+            _enregistreur = None
+        try:
+            _enregistreur = retranscription.EnregistreurWav(
+                retranscription.chemin_temporaire())
+        except Exception:
+            journaliser("_ouvrir_enregistrement: création du WAV impossible")
+            _enregistreur = None
+        return _enregistreur
+
+
+def _enregistrer_frame(mono):
+    """Ajoute une frame au WAV continu (no-op si pas d'enregistreur)."""
+    enr = _enregistreur
+    if enr is not None and not enr.ecrire(mono) and enr.erreur:
+        _caplog.error("[CONVERSATION] enregistrement continu interrompu : %s", enr.erreur)
+
+
+def _fermer_enregistrement():
+    """Clôt l'enregistreur courant et renvoie (chemin, durée_s) ou (None, 0)."""
+    global _enregistreur
+    with _enregistreur_lock:
+        enr = _enregistreur
+        _enregistreur = None
+    if enr is None:
+        return None, 0.0
+    chemin = enr.fermer()
+    if enr.erreur:
+        # WAV incomplet → inexploitable : on le jette, le temps réel fait foi.
+        retranscription.supprimer(chemin)
+        return None, 0.0
+    return chemin, enr.duree_s
 
 
 def _set_speaking(label, is_speech):
@@ -542,6 +591,10 @@ def capturer(source_factory, label):
                 gain = _get_gain(label)
                 if gain != 1.0:
                     mono = np.clip(mono * gain, -1.0, 1.0, out=mono.copy())
+                if is_cabinet:
+                    # Audio complet conservé pour la retranscription finale ;
+                    # le VAD ci-dessous n'alimente plus que l'aperçu temps réel.
+                    _enregistrer_frame(mono)
 
                 frame_rms = rms(mono)
                 segment, is_speech = segmenteur.push(mono)
@@ -804,6 +857,22 @@ def est_hallucination_generique(texte):
         if not (mots_alpha & _VERBES_COURANTS):
             return True
     return False
+
+
+def filtrer_segment_final(texte, no_speech_prob):
+    """Filtres de la retranscription finale = ceux du temps réel, dans le même
+    ordre : confiance Whisper (no_speech_prob > NO_SPEECH_MAX), corrections
+    orthographiques, hallucinations connues (patterns, bascule anglaise,
+    énumération sans verbe), puis charabia lexical (mots hors lexique
+    français). Renvoie le texte nettoyé, ou None s'il faut jeter le segment."""
+    if no_speech_prob is not None and no_speech_prob > NO_SPEECH_MAX:
+        return None
+    t = corriger_transcription((texte or "").strip())
+    if not t or est_hallucination_generique(t):
+        return None
+    if correction.contient_bascule_anglaise(t) or correction._est_charabia(t):
+        return None
+    return t
 
 
 def _init_cloud_client():
@@ -2038,6 +2107,11 @@ class Api:
         self._mode          = "tele"  # "tele" ou "cabinet" (présentiel)
         self._tray          = None    # icône barre système (EchoTray)
         self._fermeture_reelle = False  # True quand « Quitter Écho » est demandé
+        # Retranscription finale (cabinet) : état consulté par le JS
+        # (get_finalisation_status) et intégré par perform_save.
+        self._final      = {"status": "idle", "entries": None}
+        self._final_gen  = 0            # génération : un résultat périmé est ignoré
+        self._final_evt  = threading.Event()
 
     # ---- Polling -------------------------------------------------------
 
@@ -2103,8 +2177,114 @@ class Api:
                 except queue.Empty:
                     break
         self._started = False
+        # Cabinet : l'audio complet est retranscrit en arrière-plan pendant
+        # que le médecin remplit le formulaire ; perform_save l'intégrera.
+        wav, duree = _fermer_enregistrement()
+        if wav:
+            if self._mode == "cabinet" and duree >= retranscription.DUREE_MIN_S:
+                self._lancer_retranscription(wav)
+            else:
+                retranscription.supprimer(wav)
         # Intégrer les segments déjà transcrits avant l'arrêt (transcript figé).
         return self._drain_display()
+
+    # ---- Retranscription finale (cabinet) ------------------------------
+
+    def _lancer_retranscription(self, wav):
+        """Démarre le worker de retranscription sur le WAV complet."""
+        self._final_gen += 1
+        gen = self._final_gen
+        self._final = {"status": "running", "entries": None}
+        self._final_evt.clear()
+        if retranscription.mode_test_actif():
+            # Diagnostic : conserver l'enregistrement AVANT tout traitement,
+            # pour qu'il survive même à un plantage de la retranscription.
+            wav = retranscription.conserver_pour_analyse(
+                wav, getattr(self, "_start_time", None))
+            _caplog.debug("[FINAL] mode test : WAV conservé → %s", wav)
+        threading.Thread(target=self._retranscription_worker,
+                         args=(wav, gen), daemon=True).start()
+
+    def _retranscription_worker(self, wav, gen):
+        """Prétraitement → Whisper (Groq) → entrées « Conversation » horodatées.
+        Fail-safe intégral : toute erreur laisse status='failed' et l'appelant
+        conserve les segments temps réel. Le WAV est supprimé à la fin (hors
+        mode test)."""
+        garder = retranscription.mode_test_actif()
+        entries = []
+        try:
+            audio, sr = retranscription.charger_wav(wav)
+            _caplog.debug("[FINAL] WAV chargé : %.1f s", len(audio) / float(sr))
+            if len(audio) < retranscription.DUREE_MIN_S * sr:
+                raise RuntimeError("enregistrement trop court")
+            audio = retranscription.pretraiter(audio, sr=sr)
+            client = _init_cloud_client()
+            if client is None:
+                raise RuntimeError("client Groq indisponible")
+            segments = retranscription.transcrire_audio_complet(
+                audio, client,
+                prompt=WHISPER_INITIAL_PROMPT, langue=LANGUAGE,
+                prompt_max_octets=GROQ_PROMPT_MAX_BYTES, sr=sr,
+                journal=_caplog.debug,
+                annule=lambda: gen != self._final_gen)
+            debut = getattr(self, "_start_time", None) or datetime.datetime.now()
+            plancher = retranscription.plancher_energie(audio, sr)
+            for s in segments:
+                texte = filtrer_segment_final(s.get("texte"), s.get("no_speech_prob"))
+                if texte is None:
+                    continue
+                # Garde énergétique : audio au niveau du bruit de fond → texte
+                # inventé (silence de 20 s au milieu de la consultation).
+                if retranscription.segment_silencieux(audio, s["debut"], s["fin"],
+                                                      plancher, sr):
+                    _caplog.debug("[FINAL] rejeté (silence) [%.1f-%.1f] %r",
+                                  s["debut"], s["fin"], texte[:60])
+                    continue
+                ts = (debut + datetime.timedelta(seconds=s["debut"])).strftime("%H:%M:%S")
+                entries.append((ts, "Conversation", texte))
+            if not entries:
+                raise RuntimeError("retranscription vide")
+            if gen == self._final_gen:
+                self._final = {"status": "done", "entries": entries}
+                _caplog.debug("[FINAL] retranscription OK : %d lignes", len(entries))
+        except Exception:
+            if gen != self._final_gen:
+                # Consultation abandonnée ou suivante déjà lancée : résultat
+                # sans objet, ce n'est pas une panne.
+                _caplog.debug("[FINAL] retranscription périmée, ignorée")
+            else:
+                self._final = {"status": "failed", "entries": None}
+                _caplog.error("[FINAL] retranscription échouée — temps réel conservé\n%s",
+                              traceback.format_exc())
+                journaliser("retranscription finale échouée (temps réel conservé)")
+        finally:
+            if not garder:
+                retranscription.supprimer(wav)
+            if gen == self._final_gen:
+                self._final_evt.set()
+
+    def get_finalisation_status(self):
+        """État de la retranscription finale (poll JS avant perform_save) :
+        {status: idle|running|done|failed}."""
+        return {"status": self._final.get("status", "idle")}
+
+    def _integrer_retranscription(self, attente_s=5.0):
+        """Remplace les segments temps réel par la retranscription complète si
+        elle est prête (attente bornée). Sinon — échec, timeout, télé — les
+        entrées temps réel sont conservées telles quelles. Renvoie True si
+        remplacé."""
+        if self._final.get("status") == "running":
+            self._final_evt.wait(attente_s)
+        if self._final.get("status") != "done":
+            return False
+        entries = self._final.get("entries") or []
+        if not entries:
+            return False
+        with self._lock:
+            self._entries[:] = entries
+            self._seg_index.clear()
+        self._final = {"status": "done", "entries": None}   # consommée
+        return True
 
     def get_speaking_status(self):
         """État VAD temps réel pour l'indicateur « qui parle ».
@@ -2350,6 +2530,9 @@ class Api:
             cfg["mode_consultation"] = "cabinet"
             sauver_config(cfg)
 
+            # Enregistrement continu de toute la consultation (retranscription
+            # finale au « Terminer »). Sans lui, la capture temps réel suffit.
+            _ouvrir_enregistrement()
             threads = [
                 threading.Thread(target=transcrire, daemon=True),
                 threading.Thread(target=capturer,
@@ -2901,6 +3084,11 @@ class Api:
         self._saved_file_path = None
         self._saved_annexes   = []
         self._saved_is_docx   = False
+        # Retranscription d'une consultation précédente : périmée (le worker
+        # éventuel voit la génération changer et jette son résultat).
+        self._final_gen += 1
+        self._final = {"status": "idle", "entries": None}
+        self._final_evt.clear()
 
         result = self.start(mic_name, output_name, self._mode)
         if result.get("ok"):
@@ -2945,6 +3133,13 @@ class Api:
         # Autoriser une nouvelle consultation (les threads de capture et de
         # transcription s'arrêtent via stop_event ; start() en relance de neufs).
         self._started = False
+        # Enregistrement continu encore ouvert (fermeture sans « Terminer ») →
+        # jeté. Une retranscription en cours devient périmée : son WAV est
+        # supprimé par le worker, son résultat ignoré.
+        wav, _ = _fermer_enregistrement()
+        retranscription.supprimer(wav)
+        self._final_gen += 1
+        self._final = {"status": "idle", "entries": None}
         # Présélection patient jamais consommée (consultation non sauvegardée) :
         # ne pas polluer la consultation suivante.
         self._patient_presel = None
@@ -3105,6 +3300,10 @@ class Api:
         if not self._infos:
             return {"ok": False, "error": "Informations patient manquantes."}
         now = getattr(self, "_start_time", None) or datetime.datetime.now()
+        # Cabinet : la retranscription de l'audio complet remplace l'aperçu
+        # temps réel AVANT l'écriture du .docx et l'extraction du CR (le JS a
+        # déjà attendu sa fin ; ici une courte attente de sécurité).
+        self._integrer_retranscription(attente_s=5.0)
         with self._lock:
             entries = list(self._entries)
         try:
@@ -3857,6 +4056,9 @@ def main():
     # Toute exception NON attrapée (main + threads) part dans
     # %APPDATA%\Echo\erreurs.log — plus aucune panne invisible.
     installer_hooks()
+    # WAV temporaires d'une session précédente (plantage, coupure) : jamais
+    # de données audio qui traînent. Chaque suppression est journalisée.
+    retranscription.nettoyer_orphelins(journal=journaliser)
     if "--tk" in sys.argv:
         _main_tk()
     else:
