@@ -12,7 +12,13 @@ App Windows de transcription médicale. Python + pywebview.
 
 \- Tests : `.\\.venv\\Scripts\\python.exe -m pytest tests\\ -v`
 
-\- Build : PyInstaller Echo.spec puis ISCC setup.iss
+\- Build : `.\\.venv\\Scripts\\python.exe -m PyInstaller Echo.spec --noconfirm --clean`
+
+&#x20; puis `& "C:\\Program Files\\Inno Setup 7\\ISCC.exe" setup.iss` → `dist\\installer\\EchoSetup.exe`
+
+&#x20; (PAS `.venv\\Scripts\\pyinstaller.exe` : ce lanceur embarque l'ancien chemin
+
+&#x20; `Desktop\\Écho\\…` d'avant le renommage du dossier et échoue en silence, exit 1)
 
 
 
