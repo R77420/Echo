@@ -44,6 +44,10 @@ serve(async (req) => {
   const priceInstallation = Deno.env.get("PRICE_INSTALLATION")!
   const priceAbonnement = Deno.env.get("PRICE_ABONNEMENT")!
   const adminKey = Deno.env.get("ADMIN_KEY")!
+  // Interrupteur de phase bêta (secret ECHO_MODE_BETA=1) : personne n'est
+  // facturé, aucun compte existant n'est bloqué pour motif de licence.
+  // Absent ou autre valeur → comportement normal (essai puis paiement).
+  const modeBeta = Deno.env.get("ECHO_MODE_BETA") === "1"
 
   const supabase = createClient(supabaseUrl, supabaseKey)
 
@@ -135,6 +139,7 @@ serve(async (req) => {
       medecin_id: medecin.id,
       essai_fin: medecin.essai_fin,
       cle_licence: licence?.cle_licence,
+      ...(modeBeta ? { valide: true, beta: true } : {}),
     }), { headers: corsHeaders })
   }
 
@@ -172,6 +177,23 @@ serve(async (req) => {
       .eq("medecin_id", medecin.id)
       .single()
 
+    if (modeBeta) {
+      // Bêta : la connexion ne signale jamais d'essai en cours ni expiré.
+      console.log(`mode bêta actif — connexion ${medecin.email} acceptée sans contrôle de licence`)
+      return new Response(JSON.stringify({
+        ok: true,
+        medecin_id: medecin.id,
+        nom: medecin.nom,
+        email: medecin.email,
+        valide: true,
+        beta: true,
+        licence_active: medecin.licence_active,
+        en_essai: false,
+        jours_restants: 0,
+        cle_licence: licence?.cle_licence,
+      }), { headers: corsHeaders })
+    }
+
     return new Response(JSON.stringify({
       ok: true,
       medecin_id: medecin.id,
@@ -206,6 +228,24 @@ serve(async (req) => {
     const essaiFin = new Date(medecin.essai_fin)
     const joursRestants = Math.ceil((essaiFin.getTime() - maintenant.getTime()) / (1000 * 60 * 60 * 24))
     const valide = medecin.licence_active || joursRestants > 0
+
+    if (modeBeta) {
+      // Bêta : tout compte EXISTANT est valide, essai expiré ou non.
+      // en_essai=false / jours_restants=0 : les versions déjà installées
+      // n'affichent ainsi ni bandeau « Période d'essai — J-X » ni bouton
+      // de paiement, sans rebuild. (Clé inconnue → toujours refusée, plus haut.)
+      console.log(`mode bêta actif — licence de ${medecin.email} validée ` +
+                  `(hors bêta : valide=${valide}, jours_restants=${joursRestants})`)
+      return new Response(JSON.stringify({
+        ok: true,
+        valide: true,
+        beta: true,
+        licence_active: medecin.licence_active,
+        en_essai: false,
+        jours_restants: 0,
+        nom: medecin.nom,
+      }), { headers: corsHeaders })
+    }
 
     return new Response(JSON.stringify({
       ok: true,

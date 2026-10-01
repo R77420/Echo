@@ -235,6 +235,8 @@ body { font-family: var(--font); -webkit-font-smoothing: antialiased; }
 .profile-badge.active  { background: var(--accent-lt); color: var(--accent); }
 .profile-badge.trial   { background: rgba(183,121,31,0.12); color: var(--warn); }
 .profile-badge.expired { background: rgba(192,57,43,0.10); color: var(--danger); }
+.profile-badge.beta    { background: rgba(47,107,163,0.12); color: #2f6ba3; }
+[data-theme="dark"] .profile-badge.beta { background: rgba(91,176,255,0.16); color: #5bb0ff; }
 .profile-actions {
   padding: 12px;
   display: flex; flex-direction: column; gap: 6px;

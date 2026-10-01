@@ -949,6 +949,7 @@
 /* ------------------------------------------------------------------ */
 
 let currentView    = null;
+let modeBeta       = false;   // phase bêta (state.beta) : ni essai ni paiement affichés
 let allConsultations = [];
 let currentConsult   = null;
 // Cache de l'état licence (évite un appel API à chaque clic de nav).
@@ -1102,8 +1103,8 @@ onReady(async () => {
   await loadHome();
   navigate('home');
 
-  // 4. Bandeau essai
-  if (state.en_essai) showTrialBanner(state.jours_restants);
+  // 4. Bandeau essai (jamais en phase bêta)
+  appliquerStatutEssai(state);
 });
 
 /* ------------------------------------------------------------------ */
@@ -1213,7 +1214,7 @@ async function entrerApresAuth() {
   } else {
     await ouvrirBienvenue();        // nom affiché (jamais redemandé), sidebar à jour
   }
-  if (state && state.en_essai) showTrialBanner(state.jours_restants);
+  appliquerStatutEssai(state);
 }
 
 /* Étape 1 : valider le formulaire, demander le code, passer à l'étape 2. */
@@ -1473,14 +1474,25 @@ $('btn-login').addEventListener('click', async () => {
   if (state) setDoctorIdentity(state.doctor_name || '', state.specialty || '');
   await loadHome();
   navigate('home');
-  if (state && state.en_essai) showTrialBanner(state.jours_restants);
+  appliquerStatutEssai(state);
 });
 
 /* ------------------------------------------------------------------ */
 /*  Bandeau essai                                                       */
 /* ------------------------------------------------------------------ */
 
+/* Phase bêta (backend ECHO_MODE_BETA=1 → state.beta) : personne n'est
+   facturé. Ni bandeau « Période d'essai — J-X », ni bouton « Activer ma
+   licence » ; le profil affiche un badge « Version bêta ».
+   (modeBeta est déclaré avec l'état global, en tête de script.) */
+function appliquerStatutEssai(state) {
+  modeBeta = !!(state && state.beta);
+  if (modeBeta) { hide($('trial-banner')); return; }
+  if (state && state.en_essai) showTrialBanner(state.jours_restants);
+}
+
 function showTrialBanner(jours) {
+  if (modeBeta) return;
   const banner = $('trial-banner');
   const j = parseInt(jours) || 0;
   $('trial-msg').textContent = `Période d'essai — J-${j} avant la fin`;
@@ -3722,7 +3734,13 @@ $('sidebar-doc-btn').addEventListener('click', async () => {
 
   // Badge statut
   const badge = $('pp-badge');
-  if (s.licence_expired) {
+  modeBeta = !!s.beta;
+  // Bêta : pas d'abonnement à gérer ni de licence à activer.
+  $('pp-btn-abonnement').classList.toggle('hidden', modeBeta);
+  if (modeBeta) {
+    hide($('trial-banner'));
+    badge.className = 'profile-badge beta'; badge.textContent = 'Version bêta';
+  } else if (s.licence_expired) {
     badge.className = 'profile-badge expired'; badge.textContent = 'Licence expirée';
   } else if (s.en_essai) {
     badge.className = 'profile-badge trial'; badge.textContent = `Période d'essai — J-${s.jours_restants}`;

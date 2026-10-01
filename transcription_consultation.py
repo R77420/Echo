@@ -2682,6 +2682,8 @@ class Api:
                 avant = cfg.get("licence_valide_cache", True)
                 cfg["licence_valide_cache"] = bool(statut.get("valide"))
                 cfg["en_essai_cache"] = bool(statut.get("en_essai"))
+                # Phase bêta (backend ECHO_MODE_BETA=1) : ni essai ni paiement.
+                cfg["beta_cache"] = bool(statut.get("beta"))
                 if statut.get("en_essai"):
                     cfg["jours_restants"] = statut.get("jours_restants", 0)
                 sauver_config(cfg)
@@ -2709,6 +2711,7 @@ class Api:
         licence_expired = False
         en_essai        = False
         jours_restants  = 0
+        beta            = False
 
         if cle:
             # JAMAIS d'appel réseau bloquant ici (le pont JS gelait ~0,5 s
@@ -2724,12 +2727,16 @@ class Api:
             else:
                 statut = {"valide": cfg.get("licence_valide_cache", True),
                           "en_essai": cfg.get("en_essai_cache", False),
-                          "jours_restants": cfg.get("jours_restants", 0)}
+                          "jours_restants": cfg.get("jours_restants", 0),
+                          "beta": cfg.get("beta_cache", False)}
                 self._rafraichir_licence_fond(cle)
                 _chrono("get_app_state: licence depuis la config (refresh en fond)")
+            beta = bool(statut.get("beta"))
             if statut.get("valide"):
                 licence_ok = True
-                if statut.get("en_essai"):
+                # Bêta : jamais de bandeau d'essai ni de compte à rebours,
+                # quoi que dise un ancien cache.
+                if statut.get("en_essai") and not beta:
                     en_essai = True
                     jours_restants = statut.get("jours_restants", 0)
             else:
@@ -2740,6 +2747,8 @@ class Api:
             "licence_expired":   licence_expired,
             "en_essai":          en_essai,
             "jours_restants":    jours_restants,
+            # Phase bêta : l'UI masque essai/paiement et affiche « Version bêta ».
+            "beta":              beta,
             # Flag DÉDIÉ posé par complete_onboarding. doctor_name ne peut
             # plus servir de marqueur : l'inscription le stocke désormais
             # immédiatement (régression : la visite guidée ne se lançait
@@ -2853,6 +2862,12 @@ class Api:
         cfg["doctor_name"]   = res.get("nom", "")
         cfg["email"]         = email
         cfg["jours_restants"] = res.get("jours_restants", 0)
+        if res.get("beta"):
+            # Bêta : le compte est valide d'office — ne pas laisser un ancien
+            # statut « expiré » en cache rebloquer l'app après la connexion.
+            cfg["beta_cache"] = True
+            cfg["licence_valide_cache"] = True
+            cfg["en_essai_cache"] = False
         sauver_config(cfg)
         expired = not res.get("valide", True)
         return {
